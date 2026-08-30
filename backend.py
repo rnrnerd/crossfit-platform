@@ -288,7 +288,9 @@ def _public_user(u):
 
 # ── Эндпоинты ────────────────────────────────────────────────────────
 async def h_health(r):
-    return web.Response(text="ok")
+    """Показывает, поднялось ли подключение к базе: без этого весь API
+    отвечает ошибкой, а по одному «ok» причину не понять."""
+    return _json({"status": "ok", "db": db_pool is not None})
 
 
 async def h_index(r):
@@ -417,8 +419,19 @@ async def h_event(r):
 
 
 # ── Сборка приложения ────────────────────────────────────────────────
+@web.middleware
+async def db_guard(r, handler):
+    """Без базы каждый обработчик падает на db_pool=None и отдаёт голый 500,
+    из которого не видно причины. Отвечаем прямо."""
+    if r.path.startswith("/api/") and db_pool is None:
+        return _json({"error": "database_unavailable",
+                      "hint": "DATABASE_URL не задан или база недоступна"}, status=503)
+    return await handler(r)
+
+
 def build_web_app():
-    app = web.Application(client_max_size=32 * 1024 * 1024)
+    app = web.Application(client_max_size=32 * 1024 * 1024,
+                          middlewares=[db_guard])
     app.router.add_get("/", h_index)
     app.router.add_get("/healthz", h_health)
     app.router.add_get("/api/me", h_me)
