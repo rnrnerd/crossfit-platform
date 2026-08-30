@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Кроссфит-платформа</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:#0e0f12; --surface:#16181d; --surface2:#1d2027; --border:#2a2e37;
+      --text:#f2f3f5; --hint:#8b909c; --gold:#f2c440; --accent:#e0533d; --green:#3fae6b;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+    body {
+      font-family:'Inter',sans-serif; background:var(--bg); color:var(--text);
+      min-height:100vh; padding-bottom:calc(74px + env(safe-area-inset-bottom,0px));
+    }
+    .osw { font-family:'Oswald',sans-serif; }
+
+    /* Шапка */
+    .appbar { display:flex; align-items:center; justify-content:space-between;
+      padding:14px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:5; }
+    .appbar .brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:16px;
+      letter-spacing:1px; text-transform:uppercase; }
+    .appbar .brand span { color:var(--gold); }
+    .appbar .avatar { width:32px; height:32px; border-radius:50%; background:var(--surface2);
+      display:flex; align-items:center; justify-content:center; overflow:hidden;
+      font-family:'Oswald',sans-serif; font-size:12px; font-weight:700; color:var(--hint); }
+    .appbar .avatar img { width:100%; height:100%; object-fit:cover; }
+
+    .screen { display:none; padding:16px; }
+    .screen.visible { display:block; }
+    .sec-title { font-family:'Oswald',sans-serif; font-weight:700; font-size:12px;
+      letter-spacing:1.5px; text-transform:uppercase; color:var(--hint); margin:2px 2px 12px; }
+
+    /* Карточка события */
+    .ev-card { background:var(--surface); border:1px solid var(--border); border-radius:16px;
+      margin-bottom:12px; overflow:hidden; cursor:pointer; transition:border-color .12s, transform .12s; }
+    .ev-card:active { transform:scale(0.99); border-color:var(--gold); }
+    .ev-cover { height:96px; background:linear-gradient(135deg,#1d2027,#111318);
+      display:flex; align-items:center; justify-content:center; }
+    .ev-cover img { width:100%; height:100%; object-fit:cover; }
+    .ev-cover .ph { font-family:'Oswald',sans-serif; font-size:26px; font-weight:700; color:var(--border); letter-spacing:2px; }
+    .ev-body { padding:13px 14px 14px; }
+    .ev-title { font-family:'Oswald',sans-serif; font-weight:700; font-size:17px;
+      text-transform:uppercase; letter-spacing:.4px; line-height:1.2; }
+    .ev-meta { font-size:12px; color:var(--hint); margin-top:5px; }
+    .ev-foot { display:flex; align-items:center; justify-content:space-between; margin-top:11px; gap:10px; }
+    .ev-count { font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; }
+    .ev-count small { font-family:'Inter',sans-serif; font-weight:400; font-size:11px; color:var(--hint); margin-left:4px; }
+    .ev-price { font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; color:var(--gold); margin-top:3px; }
+    .div-price { font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; color:var(--gold); margin-top:6px; }
+    .div-price span { font-family:'Inter',sans-serif; font-weight:400; font-size:11px; color:var(--hint); }
+
+    .badge { font-family:'Oswald',sans-serif; font-size:10px; font-weight:600; letter-spacing:1px;
+      text-transform:uppercase; padding:5px 9px; border-radius:7px; white-space:nowrap; }
+    .badge.reg { background:var(--gold); color:#1a1a1a; }
+    .badge.live { background:var(--green); color:#08210f; }
+    .badge.done { background:var(--surface2); color:var(--hint); border:1px solid var(--border); }
+
+    /* Экран события */
+    .back-btn { background:none; border:none; color:var(--text); font-size:22px; cursor:pointer; padding:0 8px 10px 0; }
+    .ev-hero { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:14px; }
+    .ev-hero h1 { font-family:'Oswald',sans-serif; font-size:21px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.5px; line-height:1.15; }
+    .ev-hero .sub { font-size:13px; color:var(--hint); margin-top:7px; line-height:1.5; }
+    .ev-hero .desc { font-size:13px; margin-top:11px; line-height:1.55; white-space:pre-line; }
+
+    /* Баннер события */
+    .ev-banner { border-radius:16px; overflow:hidden; margin-bottom:14px; background:var(--surface2); }
+    .ev-banner img { width:100%; display:block; aspect-ratio:16/7; object-fit:cover; }
+
+    /* Счётчики: атлеты / заявки / дивизионы */
+    .stat-row { display:flex; gap:10px; margin-bottom:14px; }
+    .stat { flex:1; background:var(--surface); border:1px solid var(--border); border-radius:14px;
+      padding:12px 10px; text-align:center; }
+    .stat b { display:block; font-family:'Oswald',sans-serif; font-weight:700; font-size:22px; color:var(--gold); line-height:1; }
+    .stat span { display:block; font-size:10px; letter-spacing:.5px; text-transform:uppercase; color:var(--hint); margin-top:5px; }
+
+    /* Даты */
+    .dt-box { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:4px 14px; margin-bottom:14px; }
+    .dt-row { display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+      padding:11px 0; border-bottom:1px solid var(--border); font-size:13px; color:var(--hint); }
+    .dt-row:last-child { border-bottom:none; }
+    .dt-row b { font-family:'Oswald',sans-serif; font-weight:600; font-size:14px; color:var(--text); text-align:right; }
+
+    /* Соцсети */
+    .soc-row { display:flex; gap:10px; margin-bottom:14px; }
+    .soc { flex:1; text-align:center; text-decoration:none; background:var(--surface);
+      border:1px solid var(--border); border-radius:12px; padding:12px 10px;
+      font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; letter-spacing:.5px;
+      text-transform:uppercase; color:var(--text); }
+    .soc:active { border-color:var(--gold); }
+
+    .div-card { background:var(--surface); border:1px solid var(--border); border-radius:14px;
+      padding:13px 14px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .div-name { font-family:'Oswald',sans-serif; font-weight:600; font-size:15px; text-transform:uppercase; letter-spacing:.3px; }
+    .div-meta { font-size:11px; color:var(--hint); margin-top:4px; }
+    .div-count { font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--gold); flex:none; }
+
+    .btn { width:100%; font-family:'Oswald',sans-serif; font-weight:600; letter-spacing:.5px;
+      text-transform:uppercase; font-size:14px; background:var(--gold); color:#1a1a1a;
+      border:none; border-radius:12px; padding:14px; cursor:pointer; }
+    .btn:active { transform:scale(0.99); }
+    .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--border); }
+
+    /* Профиль */
+    .prof-head { display:flex; align-items:center; gap:14px; background:var(--surface);
+      border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:14px; }
+    .prof-ava { width:64px; height:64px; border-radius:50%; background:var(--surface2); flex:none;
+      display:flex; align-items:center; justify-content:center; overflow:hidden;
+      font-family:'Oswald',sans-serif; font-weight:700; font-size:20px; color:var(--hint); }
+    .prof-ava img { width:100%; height:100%; object-fit:cover; }
+    .prof-name { font-family:'Oswald',sans-serif; font-weight:700; font-size:18px; text-transform:uppercase; }
+    .prof-sub { font-size:12px; color:var(--hint); margin-top:4px; }
+    .field { margin-bottom:12px; }
+    .field label { display:block; font-size:10px; letter-spacing:1px; text-transform:uppercase;
+      color:var(--hint); margin-bottom:6px; }
+    .field input, .field select { width:100%; padding:12px 14px; border-radius:12px;
+      border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px;
+      font-family:'Inter',sans-serif; }
+    .field input:focus, .field select:focus { outline:none; border-color:var(--gold); }
+
+    /* Нижнее меню */
+    .tabs { position:fixed; bottom:0; left:0; right:0; z-index:20; background:var(--surface);
+      display:flex; gap:6px; border-top:1px solid var(--border);
+      padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px)); }
+    .tab { flex:1; cursor:pointer; color:var(--hint); background:none; border:none; border-radius:11px;
+      padding:10px 2px; font-family:'Oswald',sans-serif; font-size:11px; font-weight:600;
+      letter-spacing:.3px; text-transform:uppercase; transition:background .12s,color .12s; }
+    .tab.active { background:var(--gold); color:#1a1a1a; }
+    .tab:active { transform:scale(0.97); }
+
+    .empty { text-align:center; color:var(--hint); padding:48px 16px; font-size:14px; line-height:1.6; }
+    .empty b { color:var(--text); display:block; margin-bottom:6px; font-family:'Oswald',sans-serif;
+      font-size:15px; text-transform:uppercase; }
+    .toast { position:fixed; bottom:86px; left:50%; transform:translateX(-50%); background:var(--green);
+      color:#08210f; font-weight:600; font-size:13px; padding:10px 18px; border-radius:10px;
+      opacity:0; transition:opacity .2s; pointer-events:none; z-index:30; }
+    .toast.show { opacity:1; }
+  </style>
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand">Кроссфит<span>·</span>Платформа</div>
+    <div class="avatar" id="top-ava">—</div>
+  </header>
+
+  <!-- СОБЫТИЯ -->
+  <section class="screen visible" id="screen-events">
+    <div class="sec-title">Соревнования</div>
+    <div id="events-list"></div>
+  </section>
+
+  <!-- СОБЫТИЕ -->
+  <section class="screen" id="screen-event">
+    <button class="back-btn" id="event-back">‹</button>
+    <div id="event-body"></div>
+  </section>
+
+  <!-- МОИ -->
+  <section class="screen" id="screen-my">
+    <div class="sec-title">Мои соревнования</div>
+    <div id="my-list"></div>
+  </section>
+
+  <!-- ПРОФИЛЬ -->
+  <section class="screen" id="screen-profile">
+    <div id="profile-body"></div>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab active" data-screen="events">События</button>
+    <button class="tab" data-screen="my">Мои</button>
+    <button class="tab" data-screen="profile">Профиль</button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    try { tg?.ready(); tg?.expand(); } catch (e) {}
+
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const initials = n => (n||'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase() || '—';
+    function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1700); }
+
+    // все запросы подписаны Telegram-данными
+    async function api(path, opts = {}) {
+      const headers = Object.assign({'X-Init-Data': tg?.initData || ''}, opts.headers || {});
+      if (opts.body) headers['Content-Type'] = 'application/json';
+      try {
+        const r = await fetch(path, Object.assign({}, opts, {headers}));
+        return await r.json();
+      } catch (e) { return {error:'net'}; }
+    }
+
+    const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+    function fmtDates(a, b) {
+      if (!a) return '';
+      const d1 = new Date(a), d2 = b ? new Date(b) : null;
+      const day1 = d1.getDate(), m1 = MONTHS[d1.getMonth()], y = d1.getFullYear();
+      if (!d2 || +d1 === +d2) return `${day1} ${m1} ${y}`;
+      const day2 = d2.getDate(), m2 = MONTHS[d2.getMonth()];
+      return m1 === m2 ? `${day1}–${day2} ${m1} ${y}` : `${day1} ${m1} — ${day2} ${m2} ${y}`;
+    }
+    const STATUS = {
+      registration: ['reg','Регистрация'],
+      live:         ['live','Идёт сейчас'],
+      finished:     ['done','Завершено'],
+    };
+    // Цена: 3500 → «3 500 ₽», 0 → «Бесплатно»
+    function money(v) {
+      if (v === null || v === undefined) return '';
+      if (!v) return 'Бесплатно';
+      return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+    }
+    function priceRange(min, max) {
+      if (min === null || min === undefined) return '';
+      if (!min && !max) return 'Бесплатно';
+      return min === max ? money(min) : `от ${money(min)}`;
+    }
+    function plural(n, one, few, many) {
+      const a = Math.abs(n) % 100, b = a % 10;
+      if (a > 10 && a < 20) return many;
+      if (b > 1 && b < 5) return few;
+      if (b === 1) return one;
+      return many;
+    }
+
+    // ── Навигация ──
+    const SCREENS = ['events','event','my','profile'];
+    function show(name){
+      SCREENS.forEach(s => $('screen-'+s).classList.toggle('visible', s===name));
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.screen===name));
+      window.scrollTo(0,0);
+      if (name==='events') loadEvents();
+      if (name==='my') loadMy();
+      if (name==='profile') loadProfile();
+    }
+    document.querySelectorAll('.tab').forEach(t => t.onclick = () => show(t.dataset.screen));
+    $('event-back').onclick = () => show('events');
+
+    // ── Каталог событий ──
+    async function loadEvents(){
+      const box = $('events-list');
+      box.innerHTML = '<div class="empty">Загрузка…</div>';
+      const list = await api('/api/events');
+      if (!Array.isArray(list) || !list.length) {
+        box.innerHTML = '<div class="empty"><b>Пока нет соревнований</b>Здесь появятся ближайшие старты</div>';
+        return;
+      }
+      box.innerHTML = list.map(ev => {
+        const [cls, label] = STATUS[ev.status] || ['done', ev.status];
+        const place = [ev.city, ev.venue].filter(Boolean).join(' · ');
+        return `
+        <div class="ev-card" data-id="${ev.id}">
+          <div class="ev-cover">${ev.has_logo
+            ? `<img src="/api/event-logo/${ev.id}?v=${ev.logo_v}" alt="">`
+            : `<div class="ph">${esc((ev.title||'').slice(0,1).toUpperCase())}</div>`}</div>
+          <div class="ev-body">
+            <div class="ev-title">${esc(ev.title)}</div>
+            <div class="ev-meta">${esc(fmtDates(ev.date_start, ev.date_end))}${place ? ' · ' + esc(place) : ''}</div>
+            <div class="ev-foot">
+              <div>
+                <div class="ev-count">${ev.entries}<small>${plural(ev.entries,'участник','участника','участников')}</small></div>
+                ${ev.price_min !== null ? `<div class="ev-price">${esc(priceRange(ev.price_min, ev.price_max))}</div>` : ''}
+              </div>
+              <span class="badge ${cls}">${esc(label)}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('.ev-card').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+    }
+
+    // ── Экран события ──
+    async function openEvent(id){
+      show('event');
+      const box = $('event-body');
+      box.innerHTML = '<div class="empty">Загрузка…</div>';
+      const ev = await api('/api/events/' + id);
+      if (ev.error) { box.innerHTML = '<div class="empty">Не удалось загрузить событие</div>'; return; }
+      const [cls, label] = STATUS[ev.status] || ['done', ev.status];
+      const place = [ev.city, ev.venue].filter(Boolean).join(' · ');
+      const divs = (ev.divisions||[]).map(d => {
+        const kind = d.team_size > 1 ? `команда · ${d.team_size} чел.` : 'личный зачёт';
+        const limit = d.max_entries ? ` · лимит ${d.max_entries}` : '';
+        return `
+        <div class="div-card">
+          <div>
+            <div class="div-name">${esc(d.name)}</div>
+            <div class="div-meta">${esc(kind)}${esc(limit)}</div>
+            <div class="div-price">${esc(money(d.price))}${d.team_size > 1 && d.price ? ' <span>за команду</span>' : ''}</div>
+          </div>
+          <div class="div-count">${d.entries}</div>
+        </div>`;
+      }).join('') || '<div class="empty">Дивизионы пока не заданы</div>';
+
+      // строки с датами: регистрация и онлайн-отбор показываем, только если заданы
+      const rows = [
+        ['Соревнование', fmtDates(ev.date_start, ev.date_end)],
+        ['Регистрация', fmtDates(ev.reg_opens_at, ev.reg_closes_at)],
+        ['Онлайн-отбор', fmtDates(ev.qual_start, ev.qual_end)],
+      ].filter(([, v]) => v).map(([k, v]) =>
+        `<div class="dt-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+
+      const socials = [
+        ev.telegram  ? `<a class="soc" href="${esc(ev.telegram)}" target="_blank" rel="noopener">Telegram</a>` : '',
+        ev.instagram ? `<a class="soc" href="${esc(ev.instagram)}" target="_blank" rel="noopener">Instagram</a>` : '',
+      ].filter(Boolean).join('');
+
+      box.innerHTML = `
+        ${ev.has_logo ? `<div class="ev-banner"><img src="/api/event-logo/${ev.id}?v=${ev.logo_v}" alt=""></div>` : ''}
+        <div class="ev-hero">
+          <span class="badge ${cls}">${esc(label)}</span>
+          <h1 style="margin-top:10px">${esc(ev.title)}</h1>
+          <div class="sub">${place ? esc(place) : ''}</div>
+          ${ev.description ? `<div class="desc">${esc(ev.description)}</div>` : ''}
+        </div>
+
+        <div class="stat-row">
+          <div class="stat"><b>${ev.athletes}</b><span>${plural(ev.athletes,'атлет','атлета','атлетов')}</span></div>
+          <div class="stat"><b>${ev.entries}</b><span>${plural(ev.entries,'заявка','заявки','заявок')}</span></div>
+          <div class="stat"><b>${(ev.divisions||[]).length}</b><span>${plural((ev.divisions||[]).length,'дивизион','дивизиона','дивизионов')}</span></div>
+        </div>
+
+        ${rows ? `<div class="sec-title">Даты</div><div class="dt-box">${rows}</div>` : ''}
+        ${socials ? `<div class="sec-title">Соцсети</div><div class="soc-row">${socials}</div>` : ''}
+
+        <div class="sec-title">Дивизионы</div>
+        ${divs}
+        ${ev.status === 'registration'
+          ? `<button class="btn" style="margin-top:14px" id="ev-register">Зарегистрироваться</button>`
+          : ''}`;
+      const btn = $('ev-register');
+      if (btn) btn.onclick = () => toast('Регистрация — следующий шаг');
+    }
+
+    // ── Мои соревнования ──
+    async function loadMy(){
+      const box = $('my-list');
+      box.innerHTML = '<div class="empty">Загрузка…</div>';
+      const me = await api('/api/me');
+      if (me.error) { box.innerHTML = '<div class="empty">Нужно открыть приложение через Telegram</div>'; return; }
+      const list = me.my_events || [];
+      if (!list.length) {
+        box.innerHTML = '<div class="empty"><b>Вы пока никуда не заявлены</b>Выберите соревнование во вкладке «События»</div>';
+        return;
+      }
+      box.innerHTML = list.map(e => `
+        <div class="ev-card" data-id="${e.id}">
+          <div class="ev-body">
+            <div class="ev-title">${esc(e.title)}</div>
+            <div class="ev-meta">${esc(fmtDates(e.date_start))} · ${esc(e.division)}</div>
+          </div>
+        </div>`).join('');
+      box.querySelectorAll('.ev-card').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+    }
+
+    // ── Профиль ──
+    async function loadProfile(){
+      const box = $('profile-body');
+      box.innerHTML = '<div class="empty">Загрузка…</div>';
+      const me = await api('/api/me');
+      if (me.error) { box.innerHTML = '<div class="empty">Нужно открыть приложение через Telegram</div>'; return; }
+      const u = me.user;
+      setTopAvatar(u);
+      box.innerHTML = `
+        <div class="prof-head">
+          <div class="prof-ava">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u.name))}</div>
+          <div>
+            <div class="prof-name">${esc(u.name || 'Без имени')}</div>
+            <div class="prof-sub">${esc([u.city, u.gym].filter(Boolean).join(' · ') || 'Заполните профиль')}</div>
+          </div>
+        </div>
+        ${!me.profile_complete ? `<div class="empty" style="padding:0 0 14px"><b>Профиль не заполнен</b>Имя и пол нужны для участия в соревнованиях</div>` : ''}
+        <div class="field"><label>Имя и фамилия</label><input id="p-name" value="${esc(u.name)}" placeholder="Иван Петров" /></div>
+        <div class="field"><label>Пол</label><select id="p-gender">
+          <option value="">не указан</option>
+          <option value="М"${u.gender==='М'?' selected':''}>Мужской</option>
+          <option value="Ж"${u.gender==='Ж'?' selected':''}>Женский</option>
+        </select></div>
+        <div class="field"><label>Город</label><input id="p-city" value="${esc(u.city)}" placeholder="Севастополь" /></div>
+        <div class="field"><label>Зал</label><input id="p-gym" value="${esc(u.gym)}" placeholder="CrossFit Chersonesos" /></div>
+        <button class="btn" id="p-save">Сохранить</button>`;
+      $('p-save').onclick = () => toast('Сохранение профиля — следующий шаг');
+    }
+
+    function setTopAvatar(u){
+      $('top-ava').innerHTML = u?.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u?.name));
+    }
+
+    // ── Старт ──
+    // Нужный экран можно открыть сразу: ?screen=events|my|profile или ?event=<id>.
+    // Удобно для отладки и для съёмки макетов.
+    (async () => {
+      const me = await api('/api/me');
+      if (me.user) setTopAvatar(me.user);
+      const q = new URLSearchParams(location.search);
+      const eventId = q.get('event');
+      const screen = q.get('screen');
+      if (eventId) openEvent(eventId);
+      else show(SCREENS.includes(screen) ? screen : 'events');
+    })();
+  </script>
+</body>
+</html>

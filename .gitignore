@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+
+# Материалы презентации — на сервере не нужны, весят ~15 МБ.
+canvas/
+canvas-v2/
+canvas-v3/
+shots/
+assets/
+pitch.html
+*.pdf
