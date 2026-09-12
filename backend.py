@@ -664,7 +664,8 @@ async def import_partner_news(partner):
                                 published_at)
                            VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,
                                    COALESCE($10, NOW()))""",
-                        title[:300], rest[:500], p["text"][:20000], p["url"], "",
+                        # в body — текст без первой строки: она уже стала заголовком
+                        title[:300], rest[:500], rest[:20000], p["url"], "",
                         partner["id"], p["post_id"], blob, 1 if blob else 0, at)
                     added += 1
     except Exception as e:
