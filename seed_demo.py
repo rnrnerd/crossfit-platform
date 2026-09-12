@@ -13,7 +13,7 @@ import io
 import time
 import asyncio
 import random
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import asyncpg
 from dotenv import load_dotenv
@@ -47,24 +47,88 @@ def avatar(text, size=256):
     return buf.getvalue()
 
 
-def logo(seed_text, w=900, h=420):
-    """Обложка события — абстрактная (в жизни организатор загрузит своё фото).
-    Название не рисуем: оно и так выводится под обложкой в карточке."""
+# Афиши организаторов почти всегда свёрстаны на тёмном — демо-картинки
+# повторяют это, иначе на стенде не видно, как они стыкуются с фоном.
+BANNER_INKS = [(214, 58, 48), (232, 122, 40), (54, 118, 214), (196, 196, 196)]
+
+
+def banner(seed_text, w=1600, h=900):
+    """Афиша события 16:9 — идёт во всю ширину экрана.
+
+    Абстрактная: в жизни организатор приносит своё фото. Композиций несколько,
+    иначе лента из десятка событий выглядит одной картинкой и по ней нельзя
+    судить о вёрстке. Название не рисуем — оно выводится под афишей."""
     rnd = random.Random(seed_text)
-    base = rnd.choice([(28, 34, 46), (38, 30, 30), (26, 40, 38), (34, 28, 44)])
-    img = Image.new("RGB", (w, h), base)
+    ink = rnd.choice(BANNER_INKS)
+    img = Image.new("RGB", (w, h), (10, 11, 13))
     d = ImageDraw.Draw(img, "RGBA")
-    # диагональные полосы разной прозрачности — спокойный фон под текст
-    for i in range(-h, w, 46):
-        alpha = rnd.randint(6, 20)
-        d.polygon([(i, h), (i + 30, h), (i + 30 + h, 0), (i + h, 0)], fill=(255, 255, 255, alpha))
-    # мягкое затемнение снизу, чтобы карточка не спорила с текстом
-    for y in range(h // 2, h):
-        k = int(120 * (y - h // 2) / (h / 2))
-        d.line([(0, y), (w, y)], fill=(0, 0, 0, k))
-    d.rectangle([0, h - 6, w, h], fill=(242, 196, 64, 255))
+    kind = rnd.choice(["diagonal", "block", "arc", "bars"])
+
+    if kind == "diagonal":
+        for i in range(-h, w, 78):
+            d.polygon([(i, h), (i + 52, h), (i + 52 + h, 0), (i + h, 0)],
+                      fill=(255, 255, 255, rnd.randint(4, 14)))
+        x0 = rnd.randint(w // 5, w // 2)
+        d.polygon([(x0, h), (x0 + 120, h), (x0 + 120 + h, 0), (x0 + h, 0)], fill=ink + (150,))
+
+    elif kind == "block":
+        cut = rnd.randint(int(w * 0.32), int(w * 0.55))
+        d.rectangle([0, 0, cut, h], fill=ink + (140,))
+        for y in range(0, h, 34):
+            d.rectangle([cut, y, w, y + 16], fill=(255, 255, 255, rnd.randint(4, 11)))
+
+    elif kind == "arc":
+        cx, cy = rnd.randint(int(w * 0.3), int(w * 0.7)), h // 2
+        for r in range(int(h * 0.62), 0, -int(h * 0.11)):
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ink + (120,), width=9)
+
+    else:  # bars
+        x = 0
+        while x < w:
+            bw = rnd.choice([26, 42, 70, 110])
+            if rnd.random() < 0.22:
+                d.rectangle([x, 0, x + bw, h], fill=ink + (135,))
+            else:
+                d.rectangle([x, 0, x + bw, h], fill=(255, 255, 255, rnd.randint(3, 12)))
+            x += bw + rnd.choice([14, 22, 34])
+
+    # общее затемнение: интерфейс не должен спорить с афишей, поэтому даже
+    # демо-картинка держится в тёмном диапазоне
+    d.rectangle([0, 0, w, h], fill=(8, 9, 10, 105))
+    # виньетка по краям: центральный кроп на узком экране остаётся спокойным
+    for x in range(w // 4):
+        k = int(150 * (1 - x / (w / 4)))
+        d.line([(x, 0), (x, h)], fill=(0, 0, 0, k))
+        d.line([(w - 1 - x, 0), (w - 1 - x, h)], fill=(0, 0, 0, k))
     buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=88)
+    img.save(buf, "JPEG", quality=86)
+    return buf.getvalue()
+
+
+def news_image(seed_text, w=1200, h=675):
+    """Картинка новости. Демонстрационная — в жизни редактор загрузит своё фото."""
+    return banner(seed_text, w, h)
+
+
+def mark(seed_text, size=512):
+    """Квадратный знак 1:1 — показывается кругом рядом с названием.
+
+    PNG с прозрачностью: знак ложится на подложку приложения, а не тащит
+    свой фон. Рисунок держим в пределах 76% ширины — углы срежет кроп."""
+    rnd = random.Random(seed_text + "mark")
+    ink = rnd.choice(BANNER_INKS)
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    pad = int(size * 0.12)
+    d.ellipse([pad, pad, size - pad, size - pad], fill=(18, 19, 22, 255))
+    r = int(size * 0.26)
+    c = size // 2
+    d.regular_polygon((c, c, r), n_sides=6, rotation=rnd.choice([0, 30]),
+                      fill=ink + (255,))
+    d.regular_polygon((c, c, int(r * 0.52)), n_sides=6, rotation=rnd.choice([0, 30]),
+                      fill=(242, 241, 238, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
     return buf.getvalue()
 
 
@@ -88,8 +152,9 @@ async def main():
     async with pool.acquire() as c:
         # чистим всё, кроме DEV-пользователя (он привязан к Telegram-входу)
         await c.execute("""
-            TRUNCATE results, heat_entries, heats, schedule, wod_divisions, wods,
-                     entry_members, entries, divisions, event_staff, events RESTART IDENTITY CASCADE;
+            TRUNCATE news, results, heat_entries, heats, schedule, wod_divisions, wods,
+                     entry_members, entries, divisions, event_staff, events,
+                     clubs RESTART IDENTITY CASCADE;
         """)
         await c.execute("DELETE FROM users WHERE tg_id <> $1", DEV_TG_ID)
 
@@ -120,16 +185,25 @@ async def main():
 
         # ── События ──────────────────────────────────────────────────
         async def make_event(slug, title, city, venue, d1, d2, status, descr,
-                             reg1=None, reg2=None, q1=None, q2=None, tg="", ig=""):
+                             reg1=None, reg2=None, q1=None, q2=None, tg="", ig="",
+                             with_banner=True, with_mark=True):
+            # часть событий намеренно идёт без картинок: так на стенде видно
+            # запасные варианты — типографическую плашку и букву в круге
             eid = await c.fetchval(
                 """INSERT INTO events (slug,title,city,venue,date_start,date_end,
-                                       status,description,logo,logo_v,created_by,
+                                       status,description,banner,banner_v,mark,mark_v,
+                                       created_by,
                                        reg_opens_at,reg_closes_at,qual_start,qual_end,
                                        telegram,instagram)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id""",
-                slug, title, city, venue, d1, d2, status, descr, logo(title),
-                int(time.time()) % 100000, owner,   # версия меняется — кэш обложки сбрасывается
-                reg1, reg2, q1, q2, tg, ig)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                   RETURNING id""",
+                slug, title, city, venue, d1, d2, status, descr,
+                # версия меняется при каждом сиде — кэш картинок сбрасывается
+                banner(title) if with_banner else None,
+                int(time.time()) % 100000 if with_banner else 0,
+                mark(title) if with_mark else None,
+                int(time.time()) % 100000 if with_mark else 0,
+                owner, reg1, reg2, q1, q2, tg, ig)
             await c.execute(
                 """INSERT INTO event_staff (event_id,user_id,role,is_creator)
                    VALUES ($1,$2,'organizer',TRUE)""", eid, owner)
@@ -154,20 +228,173 @@ async def main():
             "Завершённый турнир — результаты доступны в лидерборде.",
             reg1=date(2026, 3, 1), reg2=date(2026, 5, 10))
 
-        async def make_div(eid, name, team_size, rule, ord_, price=0):
+        # ── Ещё события: наполняют каталог, чтобы лента и сегменты
+        # проверялись на реальной плотности. Комплексов и результатов у них нет —
+        # это витринные записи. Сроки заданы относительно сегодняшнего дня,
+        # иначе обратный отсчёт на стенде никогда не показывается.
+        today = date.today()
+        # Павла в витринные события не записываем: иначе отметка «вы заявлены»
+        # стоит на каждой строке каталога и перестаёт что-либо значить
+        OTHERS = [n for n in MEN if n != "Павел Ольховик"]
+
+        def days(n):
+            return today + timedelta(days=n)
+
+        FILLER = [
+            # slug, название, город, площадка, старт, длит., статус,
+            # закрытие регистрации, цена, размер команды, афиша, знак
+            ("autumn-throwdown-2026", "Осенний Throwdown", "Ростов-на-Дону", "Дон-Арена",
+             days(38), 1, "registration", days(9), 3500, 1, True, True),
+            ("baltic-cup-2026", "Кубок Балтики 2026", "Калининград", "Янтарь-холл",
+             days(24), 2, "registration", days(3), 4000, 1, True, True),
+            ("ural-games-2026", "Ural Games 2026", "Екатеринбург", "Экспо-центр",
+             days(0), 2, "live", days(-14), 5000, 1, True, True),
+            ("siberia-open-2026", "Открытый чемпионат Сибири по функциональному многоборью",
+             "Новосибирск", "Спорт-комплекс «Заря»",
+             days(61), 2, "registration", days(47), 4200, 1, False, True),
+            ("volga-fit-2026", "Volga Fit Fest", "Казань", "Ак Барс Арена",
+             days(52), 1, "registration", days(30), 3000, 1, True, False),
+            ("moscow-winter-2027", "Зимний кубок Москвы", "Москва", "ЦСКА Арена",
+             days(140), 2, "registration", days(112), 6000, 1, True, True),
+            ("vladivostok-team-2026", "Team Battle Владивосток", "Владивосток", "Фетисов Арена",
+             days(45), 1, "registration", days(21), 0, 2, True, True),
+            ("volga-gp-2026", "Гран-при Поволжья 2026", "Самара", "МТЛ Арена",
+             days(-56), 2, "finished", days(-84), 2800, 1, True, True),
+            ("crimea-qual-2026", "Крымский отбор 2026", "Симферополь", "Арена Юг",
+             days(-21), 1, "finished", days(-49), 2000, 1, True, True),
+        ]
+
+        for slug, title, city, venue, d1, dur, status, reg_close, price, tsize, ban, mk in FILLER:
+            eid = await make_event(
+                slug, title, city, venue, d1, d1 + timedelta(days=dur - 1), status,
+                f"{title} — тестовое событие каталога.",
+                reg1=reg_close - timedelta(days=60), reg2=reg_close,
+                with_banner=ban, with_mark=mk)
+            # набор уровней у каждого старта свой — так на превью видно разные плашки
+            LEVEL_SETS = [["rx"], ["sc", "rx"], ["bg", "sc", "rx"], ["rx", "elite"],
+                          ["sc", "rx", "elite"]]
+            levels = LEVEL_SETS[sum(map(ord, slug)) % len(LEVEL_SETS)]
+            LEVEL_NAME = {"sc": "Scaled", "bg": "Beginners", "rx": "Rx", "elite": "Elite"}
+            if tsize > 1:
+                did = await c.fetchval(
+                    """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price,level)
+                       VALUES ($1,'Команды микс',$2,'mixed',1,$3,'rx') RETURNING id""",
+                    eid, tsize, price)
+                pairs = list(zip(OTHERS[:4], WOMEN[:4]))
+                for i, (m, w) in enumerate(pairs):
+                    e = await c.fetchval(
+                        """INSERT INTO entries (event_id,division_id,team_name)
+                           VALUES ($1,$2,$3) RETURNING id""", eid, did, f"Команда {i + 1}")
+                    for j, n in enumerate((m, w)):
+                        await c.execute(
+                            """INSERT INTO entry_members (entry_id,user_id,is_captain)
+                               VALUES ($1,$2,$3)""", e, users[n], j == 0)
+            else:
+                combos = [(lv, g) for lv in levels for g in ("male", "female")]
+                for ord_, (lv, gender) in enumerate(combos, 1):
+                    names = OTHERS if gender == "male" else WOMEN
+                    did = await c.fetchval(
+                        """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price,level)
+                           VALUES ($1,$2,1,$3,$4,$5,$6) RETURNING id""",
+                        eid,
+                        f"{LEVEL_NAME[lv]} {'Мужчины' if gender == 'male' else 'Женщины'}",
+                        gender, ord_, price, lv)
+                    take = random.Random(slug + lv + gender).randint(2, 5)
+                    for n in names[:take]:
+                        e = await c.fetchval(
+                            """INSERT INTO entries (event_id,division_id)
+                               VALUES ($1,$2) RETURNING id""", eid, did)
+                        await c.execute(
+                            """INSERT INTO entry_members (entry_id,user_id,is_captain)
+                               VALUES ($1,$2,TRUE)""", e, users[n])
+                    if lv == "rx" and gender == "male" and slug in ("ural-games-2026", "baltic-cup-2026"):
+                        e = await c.fetchval(
+                            """INSERT INTO entries (event_id,division_id)
+                               VALUES ($1,$2) RETURNING id""", eid, did)
+                        await c.execute(
+                            """INSERT INTO entry_members (entry_id,user_id,is_captain)
+                               VALUES ($1,$2,TRUE)""", e, users["Павел Ольховик"])
+
+        # ── Клубы ────────────────────────────────────────────────────
+        # Заглушка до реального справочника. «Независимый атлет» сюда не кладём:
+        # это отсутствие клуба (club_id = NULL), а не строка справочника.
+        CLUBS = [
+            ("CrossFit Херсонес", "Севастополь"),
+            ("Арена Юг", "Симферополь"),
+            ("CrossFit Кубань", "Краснодар"),
+            ("Северный Ветер", "Санкт-Петербург"),
+            ("Сталь", "Екатеринбург"),
+            ("Волга Атлетик", "Казань"),
+            ("Первый Дивизион", "Москва"),
+            ("Тихий Океан", "Владивосток"),
+        ]
+        club_ids = {}
+        for cname, ccity in CLUBS:
+            club_ids[cname] = await c.fetchval(
+                """INSERT INTO clubs (name, city) VALUES ($1,$2) RETURNING id""", cname, ccity)
+        # раздаём клубы атлетам, часть оставляем независимыми
+        all_club_ids = list(club_ids.values())
+        for i, (uname, uid) in enumerate(users.items()):
+            await c.execute("UPDATE users SET club_id=$2, height_cm=$3, weight_kg=$4 WHERE id=$1",
+                            uid,
+                            None if i % 5 == 0 else all_club_ids[i % len(all_club_ids)],
+                            165 + (i * 3) % 30,
+                            round(58 + (i * 3.7) % 42, 1))
+
+        # ── Новости ──────────────────────────────────────────────────
+        NEWS = [
+            (True,  "Отбор на финал: правила сезона 2026",
+             "Федерация опубликовала регламент отбора — четыре онлайн-этапа и два очных.",
+             "Регламент закрепляет четыре онлайн-этапа с открытой подачей видео и два "
+             "очных отбора. Проходной порог в финал — 40 лучших в каждом дивизионе."),
+            (True,  "Битва за Херсонес объявила комплексы квалификации",
+             "Четыре комплекса опубликованы за два месяца до старта.",
+             "Организаторы выложили все четыре комплекса квалификации заранее, "
+             "чтобы атлеты успели спланировать подготовку."),
+            (True,  "Рекорд России в трастере побит на Кубке Юга",
+             "Новая отметка — 142,5 кг в дивизионе Rx.",
+             "Попытка состоялась в третьем комплексе финального дня."),
+            (False, "Судейский семинар пройдёт в Казани",
+             "Двухдневный курс для судей региональных стартов, набор открыт.",
+             "Курс покрывает стандарты движений, работу с протоколом и разбор спорных ситуаций."),
+            (False, "Зимний Open расширил сетку до трёх дивизионов",
+             "Добавлен дивизион для новичков без опыта соревнований.",
+             "Организаторы отмечают рост числа заявок от атлетов первого года занятий."),
+            (False, "Как читать протокол: разбор системы баллов",
+             "Почему место в комплексе важнее абсолютного результата.",
+             "Разбираем, как очки за отдельные комплексы складываются в итоговую таблицу."),
+            (False, "Открыт приём заявок на Кубок Балтики",
+             "Регистрация закроется через неделю.",
+             "Осталось ограниченное число мест в дивизионе Rx мужчины."),
+        ]
+        for i, (feat, title, summary, body_text) in enumerate(NEWS):
+            await c.execute(
+                """INSERT INTO news (title, summary, body, image, image_v,
+                                     is_featured, published_at, source_url)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                title, summary, body_text,
+                news_image(title) if feat or i % 2 == 0 else None,
+                int(time.time()) % 100000 if feat or i % 2 == 0 else 0,
+                feat, datetime.now(timezone.utc) - timedelta(days=i * 2, hours=i),
+                "https://t.me/crossfit_ru" if i % 3 == 0 else "")
+
+        async def make_div(eid, name, team_size, rule, ord_, price=0, level=''):
             return await c.fetchval(
-                """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price)
-                   VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
-                eid, name, team_size, rule, ord_, price)
+                """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price,level)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id""",
+                eid, name, team_size, rule, ord_, price, level)
 
         # ── Дивизионы ────────────────────────────────────────────────
-        b_men   = await make_div(ev_battle, "Rx Мужчины", 1, "male", 1, 4500)
-        b_women = await make_div(ev_battle, "Rx Женщины", 1, "female", 2, 4500)
-        b_pairs = await make_div(ev_battle, "Пары микс", 2, "mixed", 3, 8000)   # за команду
-        w_men   = await make_div(ev_winter, "Rx Мужчины", 1, "male", 1, 3000)
-        w_women = await make_div(ev_winter, "Rx Женщины", 1, "female", 2, 3000)
-        c_men   = await make_div(ev_cup, "Rx Мужчины", 1, "male", 1, 2500)
-        c_women = await make_div(ev_cup, "Rx Женщины", 1, "female", 2, 2500)
+        b_men   = await make_div(ev_battle, "Rx Мужчины", 1, "male", 1, 4500, "rx")
+        b_women = await make_div(ev_battle, "Rx Женщины", 1, "female", 2, 4500, "rx")
+        b_pairs = await make_div(ev_battle, "Пары микс", 2, "mixed", 3, 8000, "rx")
+        await make_div(ev_battle, "Scaled Мужчины", 1, "male", 4, 3500, "sc")
+        await make_div(ev_battle, "Elite Мужчины", 1, "male", 5, 6000, "elite")
+        w_men   = await make_div(ev_winter, "Rx Мужчины", 1, "male", 1, 3000, "rx")
+        w_women = await make_div(ev_winter, "Rx Женщины", 1, "female", 2, 3000, "rx")
+        await make_div(ev_winter, "Beginners Мужчины", 1, "male", 3, 2000, "bg")
+        c_men   = await make_div(ev_cup, "Rx Мужчины", 1, "male", 1, 2500, "rx")
+        c_women = await make_div(ev_cup, "Rx Женщины", 1, "female", 2, 2500, "rx")
 
         async def make_entry(eid, did, names, team_name=""):
             entry = await c.fetchval(

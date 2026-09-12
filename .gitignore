@@ -13,3 +13,12 @@ shots/
 assets/
 pitch.html
 *.pdf
+
+# Коммерческие материалы — репозиторий публичный, им там не место
+finmodel.xlsx
+predlozhenie-organizatoru.xlsx
+build_finmodel.py
+build_organizer_xlsx.py
+
+# Скриншоты чужого приложения (референс)
+circle21/

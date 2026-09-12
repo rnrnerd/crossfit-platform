@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Админка — Кроссфит-платформа</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /*
+      Токены те же, что в приложении, плотность другая: это рабочий стол
+      оператора, а не витрина. Таблицы, а не карточки.
+    */
+    :root {
+      --void:#08090a; --plate:#131417; --plate2:#1b1d21;
+      --chalk:#f2f1ee; --steel:#7c828b; --live:#ff3b30; --accent:#a8cc3a;
+      --hair:rgba(255,255,255,.09);
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Onest',-apple-system,'Segoe UI',Roboto,sans-serif;
+      background:var(--void); color:var(--chalk); font-size:14px; line-height:1.45;
+      -webkit-font-smoothing:antialiased; }
+    button, input, select, textarea { font:inherit; color:inherit; }
+    [hidden] { display:none !important; }
+    a { color:var(--accent); }
+
+    /* ── Вход ── */
+    .login { min-height:100vh; display:grid; place-items:center; padding:24px; }
+    .login form { width:340px; background:var(--plate); border-radius:14px; padding:26px; }
+    .login h1 { font-size:19px; font-weight:700; letter-spacing:-.02em; }
+    .login p { color:var(--steel); margin:6px 0 20px; }
+
+    /* ── Каркас ── */
+    .top { display:flex; align-items:center; gap:16px; padding:0 22px; height:56px;
+      box-shadow:inset 0 -1px 0 var(--hair); position:sticky; top:0; background:var(--void); z-index:5; }
+    .top b { font-size:15px; font-weight:700; color:var(--accent); }
+    .top .sp { flex:1; }
+    .wrap { display:grid; grid-template-columns:200px 1fr; align-items:start; }
+    .nav { padding:18px 12px; position:sticky; top:56px; }
+    .nav button { display:block; width:100%; text-align:left; background:none; border:none;
+      cursor:pointer; padding:9px 12px; border-radius:8px; color:var(--steel); font-weight:500; }
+    .nav button[aria-current] { background:var(--plate); color:var(--chalk); }
+    .main { padding:22px 26px 60px; min-width:0; }
+
+    h2 { font-size:20px; font-weight:700; letter-spacing:-.02em; }
+    .row-between { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    .muted { color:var(--steel); }
+    .sub { color:var(--steel); margin-top:4px; }
+
+    /* ── Таблицы ── */
+    table { width:100%; border-collapse:collapse; margin-top:16px; }
+    th { text-align:left; font-size:12px; font-weight:500; color:var(--steel);
+      padding:0 10px 8px; box-shadow:inset 0 -1px 0 var(--hair); white-space:nowrap; }
+    td { padding:11px 10px; box-shadow:inset 0 -1px 0 var(--hair); vertical-align:top; }
+    tr.click { cursor:pointer; }
+    tr.click:hover td { background:var(--plate); }
+    td.num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+    .tag { display:inline-block; font-size:11px; font-weight:600; background:var(--plate2);
+      border-radius:6px; padding:3px 7px; white-space:nowrap; }
+    .tag.on { background:var(--accent); color:var(--void); }
+    .tag.off { color:var(--steel); }
+
+    /* ── Формы ── */
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+      gap:14px; margin-top:18px; }
+    .f label { display:block; font-size:12px; color:var(--steel); margin-bottom:6px; }
+    .f input, .f select, .f textarea { width:100%; min-height:40px; padding:9px 12px;
+      background:var(--plate); border:none; border-radius:9px; }
+    .f textarea { min-height:110px; resize:vertical; line-height:1.5; }
+    .f input:focus, .f select:focus, .f textarea:focus {
+      outline:2px solid var(--steel); outline-offset:-2px; }
+    .f input.bad, .f textarea.bad { outline:1.5px solid var(--live); outline-offset:-1.5px; }
+    .wide { grid-column:1/-1; }
+    .err { color:var(--live); font-size:12px; margin-top:6px; }
+
+    .btn { min-height:40px; padding:0 18px; border:none; border-radius:9px;
+      background:var(--chalk); color:var(--void); font-weight:700; cursor:pointer; }
+    .btn:disabled { background:var(--plate); color:var(--steel); cursor:default; }
+    .btn.quiet { background:var(--plate); color:var(--chalk); font-weight:500; }
+    .btn.link { background:none; color:var(--steel); padding:0 6px; font-weight:500;
+      text-decoration:underline; text-underline-offset:3px; }
+    .btn.link.danger { color:var(--live); }
+    .bar { display:flex; gap:10px; align-items:center; margin-top:22px; }
+
+    /* ── Картинки события ── */
+    .imgs { display:flex; gap:16px; margin-top:18px; flex-wrap:wrap; }
+    .img-slot { background:var(--plate); border-radius:10px; padding:12px; }
+    .img-slot .label { font-size:12px; color:var(--steel); margin-bottom:8px; }
+    .img-slot .prev { background:var(--plate2); border-radius:8px; overflow:hidden;
+      display:grid; place-items:center; color:var(--steel); font-size:12px; }
+    .img-slot.banner .prev { width:288px; height:162px; }
+    .img-slot.mark .prev { width:96px; height:96px; border-radius:50%; }
+    .img-slot img { width:100%; height:100%; object-fit:cover; }
+
+    .note { color:var(--steel); padding:26px 0; }
+    .toast { position:fixed; right:22px; bottom:22px; background:var(--chalk); color:var(--void);
+      padding:11px 18px; border-radius:9px; font-weight:500; opacity:0;
+      transition:opacity .18s; pointer-events:none; }
+    .toast.show { opacity:1; }
+    .warn { background:var(--plate); border-radius:10px; padding:14px 16px;
+      margin-top:16px; color:var(--steel); }
+    .warn b { color:var(--chalk); font-weight:500; }
+  </style>
+</head>
+<body>
+
+<div class="login" id="login">
+  <form id="login-form">
+    <h1>Админка</h1>
+    <p class="muted">Кроссфит-платформа</p>
+    <div class="f">
+      <label for="pw">Пароль</label>
+      <input id="pw" type="password" autocomplete="current-password" autofocus />
+      <div class="err" id="login-err" hidden>Пароль не подошёл</div>
+    </div>
+    <div class="bar"><button class="btn" type="submit">Войти</button></div>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <div class="top">
+    <b>Кроссфит-платформа</b>
+    <span class="muted">админка</span>
+    <span class="sp"></span>
+    <button class="btn link" id="logout">Выйти</button>
+  </div>
+  <div class="wrap">
+    <nav class="nav">
+      <button data-page="events" aria-current="page">События</button>
+      <button data-page="news">Новости</button>
+      <button data-page="clubs">Клубы</button>
+    </nav>
+    <main class="main" id="main"></main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let PW = sessionStorage.getItem('adminpw') || '';
+
+  function toast(m) {
+    const t = $('toast'); t.textContent = m; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1800);
+  }
+
+  // Пароль уходит в base64: заголовки HTTP не переносят кириллицу,
+  // и с русским паролем браузер просто откажется отправить запрос.
+  const pwHeader = () => ({'X-Admin-Password-B64':
+    btoa(String.fromCharCode(...new TextEncoder().encode(PW)))});
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign(pwHeader(), opts.headers || {});
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    try {
+      const r = await fetch(path, Object.assign({}, opts, {headers}));
+      if (r.status === 403) { logout(); return {error: 'forbidden'}; }
+      return await r.json();
+    } catch (e) { return {error: 'net'}; }
+  }
+  const send = (p, m, b) => api(p, {method: m, body: b === undefined ? undefined : JSON.stringify(b)});
+
+  // ── Вход ──
+  $('login-form').onsubmit = async e => {
+    e.preventDefault();
+    PW = $('pw').value;
+    const r = await api('/api/admin/check');
+    if (r.error) {
+      $('login-err').hidden = false;
+      $('login-err').textContent = r.error === 'forbidden'
+        ? 'Пароль не подошёл. Если ADMIN_PASSWORD не задан в окружении — админка выключена.'
+        : 'Сервер не ответил. Проверьте, что он запущен.';
+      return;
+    }
+    sessionStorage.setItem('adminpw', PW);
+    start();
+  };
+  function logout() {
+    sessionStorage.removeItem('adminpw'); PW = '';
+    $('app').hidden = true; $('login').hidden = false;
+  }
+  $('logout').onclick = logout;
+
+  function start() {
+    $('login').hidden = true; $('app').hidden = false;
+    go('events');
+  }
+
+  let page = 'events';
+  function go(name) {
+    page = name;
+    document.querySelectorAll('.nav button').forEach(b => {
+      if (b.dataset.page === name) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+    });
+    if (name === 'events') listEvents();
+    if (name === 'news')   listNews();
+    if (name === 'clubs')  listClubs();
+  }
+  document.querySelectorAll('.nav button').forEach(b => b.onclick = () => go(b.dataset.page));
+
+  const STATUS = {draft:'Черновик', registration:'Регистрация', live:'Идёт', finished:'Завершено'};
+  const RULE = {any:'Любой', male:'Мужской', female:'Женский', mixed:'Микс'};
+  const LEVEL = {'':'—', sc:'Sc', bg:'Bg', rx:'Rx', elite:'Elite'};
+  const fmtMoney = v => v ? String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽' : 'Бесплатно';
+
+  // Уменьшаем на клиенте: с диска прилетают файлы по 5–15 МБ
+  function pickImage(w, h) {
+    return new Promise(resolve => {
+      const inp = Object.assign(document.createElement('input'), {type:'file', accept:'image/*'});
+      inp.onchange = async () => {
+        const file = inp.files?.[0];
+        if (!file) return resolve(null);
+        try {
+          const bmp = await createImageBitmap(file);
+          const scale = Math.max(w / bmp.width, h / bmp.height);
+          const sw = w / scale, sh = h / scale;
+          const cv = Object.assign(document.createElement('canvas'), {width:w, height:h});
+          cv.getContext('2d').drawImage(
+            bmp, (bmp.width - sw) / 2, (bmp.height - sh) / 2, sw, sh, 0, 0, w, h);
+          resolve(cv.toDataURL('image/jpeg', .88));
+        } catch (e) { toast('Не удалось прочитать файл'); resolve(null); }
+      };
+      inp.click();
+    });
+  }
+
+  // ── События ──
+  async function listEvents() {
+    const m = $('main');
+    m.innerHTML = '<div class="note">Загрузка…</div>';
+    const list = await api('/api/admin/events');
+    if (!Array.isArray(list)) { m.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    m.innerHTML = `
+      <div class="row-between">
+        <div><h2>События</h2><div class="sub">${list.length} всего, включая черновики</div></div>
+        <button class="btn" id="new-ev">Новое событие</button>
+      </div>
+      <table>
+        <tr><th>Название</th><th>Город</th><th>Статус</th><th>Начало</th>
+            <th>Картинки</th><th>Источник</th><th class="num">Див.</th><th class="num">Заявок</th></tr>
+        ${list.map(e => `
+          <tr class="click" data-id="${e.id}">
+            <td><b>${esc(e.title)}</b><div class="muted">${esc(e.slug)}</div></td>
+            <td>${esc(e.city) || '<span class="muted">—</span>'}</td>
+            <td><span class="tag ${e.status === 'draft' ? 'off' : ''}">${STATUS[e.status] || e.status}</span></td>
+            <td>${esc(e.date_start) || '<span class="muted">—</span>'}</td>
+            <td>${e.has_banner ? '<span class="tag">афиша</span> ' : ''}${
+                  e.has_mark ? '<span class="tag">знак</span>' : ''}${
+                  !e.has_banner && !e.has_mark ? '<span class="muted">нет</span>' : ''}</td>
+            <td>${e.feed_url ? '<span class="tag on">модуль</span>' : '<span class="muted">свои данные</span>'}</td>
+            <td class="num">${e.divisions}</td><td class="num">${e.entries}</td>
+          </tr>`).join('')}
+      </table>`;
+    $('new-ev').onclick = () => editEvent(null);
+    m.querySelectorAll('tr.click').forEach(t => t.onclick = () => editEvent(t.dataset.id));
+  }
+
+  const F = (id, label, val, type = 'text', extra = '') => `
+    <div class="f"><label for="${id}">${label}</label>
+      <input id="${id}" type="${type}" value="${esc(val ?? '')}" ${extra} /></div>`;
+
+  async function editEvent(id) {
+    const m = $('main');
+    m.innerHTML = '<div class="note">Загрузка…</div>';
+    const ev = id ? await api('/api/admin/events/' + id)
+                  : {status:'draft', visibility:'public', divisions:[]};
+    if (ev.error) { m.innerHTML = '<div class="note">Событие не найдено.</div>'; return; }
+
+    m.innerHTML = `
+      <div class="row-between">
+        <div><h2>${id ? esc(ev.title) : 'Новое событие'}</h2>
+             <div class="sub">${id ? esc(ev.slug) : 'Заполните название и сохраните'}</div></div>
+        <button class="btn quiet" id="back">К списку</button>
+      </div>
+
+      <div class="grid">
+        ${F('ev-title', 'Название', ev.title)}
+        ${F('ev-city', 'Город', ev.city)}
+        ${F('ev-venue', 'Площадка', ev.venue)}
+        <div class="f"><label for="ev-status">Статус</label><select id="ev-status">
+          ${Object.entries(STATUS).map(([k, v]) =>
+            `<option value="${k}"${ev.status === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        <div class="f"><label for="ev-vis">Видимость</label><select id="ev-vis">
+          <option value="public"${ev.visibility === 'public' ? ' selected' : ''}>В каталоге</option>
+          <option value="link"${ev.visibility === 'link' ? ' selected' : ''}>Только по ссылке</option>
+        </select></div>
+        ${F('ev-ds', 'Начало', ev.date_start, 'date')}
+        ${F('ev-de', 'Конец', ev.date_end, 'date')}
+        ${F('ev-ro', 'Регистрация с', ev.reg_opens_at, 'date')}
+        ${F('ev-rc', 'Регистрация до', ev.reg_closes_at, 'date')}
+        ${F('ev-qs', 'Онлайн-отбор с', ev.qual_start, 'date')}
+        ${F('ev-qe', 'Онлайн-отбор до', ev.qual_end, 'date')}
+        ${F('ev-tg', 'Telegram', ev.telegram, 'url')}
+        ${F('ev-ig', 'Instagram', ev.instagram, 'url')}
+        <div class="f wide"><label for="ev-desc">Описание</label>
+          <textarea id="ev-desc">${esc(ev.description)}</textarea></div>
+        <div class="f wide"><label for="ev-feed">Адрес соревновательного модуля</label>
+          <input id="ev-feed" type="url" value="${esc(ev.feed_url)}"
+                 placeholder="https://… — пусто, если турнир ведётся в платформе" /></div>
+      </div>
+      <div class="err" id="ev-err" hidden></div>
+      <div class="bar"><button class="btn" id="ev-save">Сохранить</button></div>
+
+      ${id ? `
+      <div class="imgs">
+        <div class="img-slot banner">
+          <div class="label">Афиша 16:9 — во всю ширину экрана</div>
+          <div class="prev" id="prev-banner">${ev.has_banner
+            ? `<img src="/api/event-banner/${id}?t=${Date.now()}" alt="">` : 'нет'}</div>
+          <div class="bar"><button class="btn quiet" id="up-banner">Загрузить</button></div>
+        </div>
+        <div class="img-slot mark">
+          <div class="label">Знак 1:1 — кругом у названия</div>
+          <div class="prev" id="prev-mark">${ev.has_mark
+            ? `<img src="/api/event-mark/${id}?t=${Date.now()}" alt="">` : 'нет'}</div>
+          <div class="bar"><button class="btn quiet" id="up-mark">Загрузить</button></div>
+        </div>
+      </div>
+
+      <div class="row-between" style="margin-top:34px">
+        <h2>Дивизионы</h2><button class="btn quiet" id="new-div">Добавить</button>
+      </div>
+      <div id="divs"></div>
+
+      ${ev.feed_url ? `<div class="warn"><b>Турнир ведётся во внешнем модуле.</b>
+        Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы дивизион
+        попал в протокол, заполните у него «Категория в модуле» и «Пол в модуле» —
+        модуль знает не дивизион, а пару «категория + пол».</div>` : ''}
+
+      <div class="row-between" style="margin-top:34px"><h2>Заявки</h2></div>
+      <div id="entries"><div class="note">Загрузка…</div></div>
+      ` : ''}`;
+
+    $('back').onclick = listEvents;
+    $('ev-save').onclick = () => saveEvent(id);
+    if (id) {
+      $('up-banner').onclick = () => uploadEventImage(id, 'banner', 1600, 900);
+      $('up-mark').onclick = () => uploadEventImage(id, 'mark', 512, 512);
+      $('new-div').onclick = () => divRow(id, null);
+      renderDivs(id, ev.divisions, !!ev.feed_url);
+      loadEntries(id);
+    }
+  }
+
+  async function saveEvent(id) {
+    const b = $('ev-save');
+    const body = {
+      title: $('ev-title').value, city: $('ev-city').value, venue: $('ev-venue').value,
+      status: $('ev-status').value, visibility: $('ev-vis').value,
+      date_start: $('ev-ds').value, date_end: $('ev-de').value,
+      reg_opens_at: $('ev-ro').value, reg_closes_at: $('ev-rc').value,
+      qual_start: $('ev-qs').value, qual_end: $('ev-qe').value,
+      telegram: $('ev-tg').value, instagram: $('ev-ig').value,
+      description: $('ev-desc').value, feed_url: $('ev-feed').value,
+    };
+    b.disabled = true; b.textContent = 'Сохраняем…';
+    const res = await send(id ? '/api/admin/events/' + id : '/api/admin/events',
+                           id ? 'PUT' : 'POST', body);
+    b.disabled = false; b.textContent = 'Сохранить';
+    if (res.error) {
+      const e = $('ev-err');
+      e.hidden = false;
+      e.textContent = Object.values(res.fields || {})[0] || 'Не сохранилось';
+      return;
+    }
+    toast('Сохранено');
+    // новое событие получает id только после сохранения — открываем его заново,
+    // иначе картинки и дивизионы некуда прикреплять
+    if (!id) editEvent(res.id); else $('ev-err').hidden = true;
+  }
+
+  async function uploadEventImage(id, kind, w, h) {
+    const data = await pickImage(w, h);
+    if (!data) return;
+    const res = await send(`/api/admin/events/${id}/image`, 'POST', {kind, data});
+    if (res.error) { toast('Не загрузилось'); return; }
+    const url = kind === 'banner' ? `/api/event-banner/${id}` : `/api/event-mark/${id}`;
+    $('prev-' + kind).innerHTML = `<img src="${url}?t=${Date.now()}" alt="">`;
+    toast(kind === 'banner' ? 'Афиша обновлена' : 'Знак обновлён');
+  }
+
+  function renderDivs(eid, divs, feed) {
+    $('divs').innerHTML = !divs.length
+      ? '<div class="note">Дивизионов нет. Без них нельзя подать заявку.</div>'
+      : `<table>
+          <tr><th>Название</th><th>Уровень</th><th>Состав</th><th>Пол</th>
+              <th class="num">Цена</th><th class="num">Лимит</th>
+              ${feed ? '<th>В модуле</th>' : ''}<th></th></tr>
+          ${divs.map(d => `
+            <tr data-id="${d.id}">
+              <td><b>${esc(d.name)}</b></td>
+              <td><span class="tag">${LEVEL[d.level] || d.level}</span></td>
+              <td>${d.team_size > 1 ? `Команда ${d.team_size}` : 'Личный'}</td>
+              <td>${RULE[d.gender_rule] || d.gender_rule}</td>
+              <td class="num">${fmtMoney(d.price)}</td>
+              <td class="num">${d.max_entries || '—'}</td>
+              ${feed ? `<td>${d.feed_category
+                ? esc(d.feed_category + ' / ' + (d.feed_gender || 'любой'))
+                : '<span class="muted">не задано</span>'}</td>` : ''}
+              <td><button class="btn link" data-edit="${d.id}">Изменить</button>
+                  <button class="btn link danger" data-del="${d.id}">Удалить</button></td>
+            </tr>`).join('')}
+        </table>`;
+    $('divs').querySelectorAll('[data-edit]').forEach(b => b.onclick = () =>
+      divRow(eid, divs.find(x => String(x.id) === b.dataset.edit)));
+    $('divs').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      const res = await send('/api/admin/divisions/' + b.dataset.del, 'DELETE');
+      if (res.error === 'has_entries') {
+        toast(`Нельзя удалить: в дивизионе ${res.entries} заявок`); return;
+      }
+      if (res.error) { toast('Не удалилось'); return; }
+      toast('Дивизион удалён'); editEvent(eid);
+    });
+  }
+
+  function divRow(eid, d) {
+    d = d || {name:'', level:'', team_size:1, gender_rule:'any', price:0,
+              max_entries:'', ord:0, feed_category:'', feed_gender:''};
+    const m = $('main');
+    const prev = m.innerHTML;
+    m.innerHTML = `
+      <div class="row-between">
+        <h2>${d.id ? 'Дивизион' : 'Новый дивизион'}</h2>
+        <button class="btn quiet" id="d-back">Назад</button>
+      </div>
+      <div class="grid">
+        ${F('d-name', 'Название', d.name)}
+        <div class="f"><label for="d-level">Уровень</label><select id="d-level">
+          ${Object.entries(LEVEL).map(([k, v]) =>
+            `<option value="${k}"${d.level === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        ${F('d-team', 'Человек в команде (1 — личный зачёт)', d.team_size, 'number', 'min="1" max="12"')}
+        <div class="f"><label for="d-rule">Пол</label><select id="d-rule">
+          ${Object.entries(RULE).map(([k, v]) =>
+            `<option value="${k}"${d.gender_rule === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        ${F('d-price', 'Цена, ₽', d.price, 'number', 'min="0"')}
+        ${F('d-limit', 'Лимит заявок (пусто — без лимита)', d.max_entries ?? '', 'number', 'min="1"')}
+        ${F('d-ord', 'Порядок', d.ord, 'number', 'min="0"')}
+        ${F('d-fc', 'Категория в модуле', d.feed_category)}
+        ${F('d-fg', 'Пол в модуле (М / Ж)', d.feed_gender)}
+      </div>
+      <div class="err" id="d-err" hidden></div>
+      <div class="bar"><button class="btn" id="d-save">Сохранить</button></div>`;
+    $('d-back').onclick = () => editEvent(eid);
+    $('d-save').onclick = async () => {
+      const body = {
+        event_id: eid, name: $('d-name').value, level: $('d-level').value,
+        team_size: $('d-team').value, gender_rule: $('d-rule').value,
+        price: $('d-price').value, max_entries: $('d-limit').value,
+        ord: $('d-ord').value, feed_category: $('d-fc').value, feed_gender: $('d-fg').value,
+      };
+      const res = await send(d.id ? '/api/admin/divisions/' + d.id : '/api/admin/divisions',
+                             d.id ? 'PUT' : 'POST', body);
+      if (res.error) {
+        const e = $('d-err'); e.hidden = false;
+        e.textContent = Object.values(res.fields || {})[0] || 'Не сохранилось';
+        return;
+      }
+      toast('Сохранено'); editEvent(eid);
+    };
+  }
+
+  async function loadEntries(eid) {
+    const box = $('entries');
+    const list = await api(`/api/admin/events/${eid}/entries`);
+    if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    if (!list.length) { box.innerHTML = '<div class="note">Заявок пока нет.</div>'; return; }
+    const active = list.filter(x => x.status === 'active').length;
+    box.innerHTML = `
+      <div class="sub">${active} активных из ${list.length}</div>
+      <table>
+        <tr><th>Участник</th><th>Дивизион</th><th>Город</th><th>Подана</th><th>Статус</th><th></th></tr>
+        ${list.map(e => `
+          <tr>
+            <td><b>${esc(e.team_name || e.members[0] || '—')}</b>${
+              e.team_name || e.members.length > 1
+                ? `<div class="muted">${esc(e.members.join(', '))}</div>` : ''}</td>
+            <td>${esc(e.division)}</td>
+            <td>${esc(e.cities[0] || '—')}</td>
+            <td>${esc((e.created_at || '').slice(0, 10))}</td>
+            <td><span class="tag ${e.status === 'active' ? '' : 'off'}">${
+              e.status === 'active' ? 'Активна' : 'Снята'}</span></td>
+            <td><button class="btn link${e.status === 'active' ? ' danger' : ''}"
+                        data-en="${e.id}" data-to="${e.status === 'active' ? 'withdrawn' : 'active'}">${
+              e.status === 'active' ? 'Снять' : 'Вернуть'}</button></td>
+          </tr>`).join('')}
+      </table>`;
+    box.querySelectorAll('[data-en]').forEach(b => b.onclick = async () => {
+      const res = await send('/api/admin/entries/' + b.dataset.en, 'POST', {status: b.dataset.to});
+      if (res.error) { toast('Не получилось'); return; }
+      toast(b.dataset.to === 'active' ? 'Заявка возвращена' : 'Заявка снята');
+      loadEntries(eid);
+    });
+  }
+
+  // ── Новости ──
+  async function listNews() {
+    const m = $('main');
+    m.innerHTML = '<div class="note">Загрузка…</div>';
+    const list = await api('/api/admin/news');
+    if (!Array.isArray(list)) { m.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    m.innerHTML = `
+      <div class="row-between">
+        <div><h2>Новости</h2><div class="sub">${list.length} всего, из них ${
+          list.filter(n => n.is_featured).length} в слайдере на главной</div></div>
+        <button class="btn" id="new-news">Новая</button>
+      </div>
+      <table>
+        <tr><th>Заголовок</th><th>Дата</th><th>Картинка</th><th>Слайдер</th><th></th></tr>
+        ${list.map(n => `
+          <tr>
+            <td><b>${esc(n.title)}</b><div class="muted">${esc(n.summary)}</div></td>
+            <td>${esc(n.published_at.slice(0, 10))}</td>
+            <td>${n.has_image ? '<span class="tag">есть</span>' : '<span class="muted">нет</span>'}</td>
+            <td>${n.is_featured ? '<span class="tag on">да</span>' : '<span class="muted">нет</span>'}</td>
+            <td><button class="btn link" data-ed="${n.id}">Изменить</button>
+                <button class="btn link danger" data-del="${n.id}">Удалить</button></td>
+          </tr>`).join('')}
+      </table>`;
+    $('new-news').onclick = () => editNews(null);
+    m.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => editNews(b.dataset.ed, list));
+    m.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      if (!confirm('Удалить новость? Отменить нельзя.')) return;
+      await send('/api/admin/news/' + b.dataset.del, 'DELETE');
+      toast('Новость удалена'); listNews();
+    });
+  }
+
+  async function editNews(id, list) {
+    const n = id ? (list || []).find(x => String(x.id) === String(id)) || {} : {};
+    const full = id ? await api('/api/news/' + id) : {};
+    const m = $('main');
+    m.innerHTML = `
+      <div class="row-between">
+        <h2>${id ? 'Новость' : 'Новая новость'}</h2>
+        <button class="btn quiet" id="n-back">К списку</button>
+      </div>
+      <div class="grid">
+        ${F('n-title', 'Заголовок', full.title ?? n.title)}
+        ${F('n-url', 'Ссылка на первоисточник', full.source_url ?? n.source_url, 'url')}
+        <div class="f wide"><label for="n-sum">Краткое описание — видно в списке и в слайдере</label>
+          <input id="n-sum" value="${esc(full.summary ?? n.summary ?? '')}" /></div>
+        <div class="f wide"><label for="n-body">Текст</label>
+          <textarea id="n-body">${esc(full.body ?? '')}</textarea></div>
+        <div class="f"><label for="n-feat">В слайдере на главной</label><select id="n-feat">
+          <option value="0">Нет</option>
+          <option value="1"${(full.is_featured ?? n.is_featured) ? ' selected' : ''}>Да</option>
+        </select></div>
+      </div>
+      <div class="err" id="n-err" hidden></div>
+      <div class="bar"><button class="btn" id="n-save">Сохранить</button></div>
+      ${id ? `
+      <div class="imgs">
+        <div class="img-slot banner">
+          <div class="label">Картинка 16:9</div>
+          <div class="prev" id="prev-news">${(full.has_image ?? n.has_image)
+            ? `<img src="/api/news-image/${id}?t=${Date.now()}" alt="">` : 'нет'}</div>
+          <div class="bar"><button class="btn quiet" id="up-news">Загрузить</button></div>
+        </div>
+      </div>` : '<div class="warn">Картинку можно загрузить после сохранения.</div>'}`;
+    $('n-back').onclick = listNews;
+    $('n-save').onclick = async () => {
+      const body = {title: $('n-title').value, summary: $('n-sum').value,
+                    body: $('n-body').value, source_url: $('n-url').value,
+                    is_featured: $('n-feat').value === '1'};
+      const res = await send(id ? '/api/admin/news/' + id : '/api/admin/news',
+                             id ? 'PUT' : 'POST', body);
+      if (res.error) {
+        const e = $('n-err'); e.hidden = false;
+        e.textContent = Object.values(res.fields || {})[0] || 'Не сохранилось';
+        return;
+      }
+      toast('Сохранено');
+      if (!id) editNews(res.id, [{id: res.id}]); else $('n-err').hidden = true;
+    };
+    if (id) $('up-news').onclick = async () => {
+      const data = await pickImage(1200, 675);
+      if (!data) return;
+      const res = await send(`/api/admin/news/${id}/image`, 'POST', {data});
+      if (res.error) { toast('Не загрузилось'); return; }
+      $('prev-news').innerHTML = `<img src="/api/news-image/${id}?t=${Date.now()}" alt="">`;
+      toast('Картинка обновлена');
+    };
+  }
+
+  // ── Клубы ──
+  async function listClubs() {
+    const m = $('main');
+    m.innerHTML = '<div class="note">Загрузка…</div>';
+    const list = await api('/api/admin/clubs');
+    if (!Array.isArray(list)) { m.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    m.innerHTML = `
+      <div class="row-between">
+        <div><h2>Клубы</h2>
+          <div class="sub">Справочник для профиля атлета. «Независимый атлет» —
+            это отсутствие клуба, отдельной записью не заводится</div></div>
+      </div>
+      <div class="grid" style="max-width:640px">
+        ${F('c-name', 'Название', '')}
+        ${F('c-city', 'Город', '')}
+        <div class="f"><label>&nbsp;</label><button class="btn" id="c-add">Добавить</button></div>
+      </div>
+      <table>
+        <tr><th>Название</th><th>Город</th><th class="num">Атлетов</th><th>Показывать</th><th></th></tr>
+        ${list.map(c => `
+          <tr data-id="${c.id}">
+            <td><b>${esc(c.name)}</b></td>
+            <td>${esc(c.city) || '<span class="muted">—</span>'}</td>
+            <td class="num">${c.athletes}</td>
+            <td><span class="tag ${c.is_active ? '' : 'off'}">${c.is_active ? 'да' : 'скрыт'}</span></td>
+            <td><button class="btn link" data-toggle="${c.id}" data-active="${c.is_active ? 1 : 0}">${
+              c.is_active ? 'Скрыть' : 'Показать'}</button></td>
+          </tr>`).join('')}
+      </table>`;
+    $('c-add').onclick = async () => {
+      const res = await send('/api/admin/clubs', 'POST',
+                             {name: $('c-name').value, city: $('c-city').value, is_active: true});
+      if (res.error) { toast(Object.values(res.fields || {})[0] || 'Не сохранилось'); return; }
+      toast('Клуб добавлен'); listClubs();
+    };
+    m.querySelectorAll('[data-toggle]').forEach(b => b.onclick = async () => {
+      const row = list.find(x => String(x.id) === b.dataset.toggle);
+      await send('/api/admin/clubs/' + row.id, 'PUT',
+                 {name: row.name, city: row.city, is_active: !row.is_active});
+      listClubs();
+    });
+  }
+
+  // ── Старт ──
+  (async () => {
+    if (!PW) return;
+    const r = await api('/api/admin/check');
+    if (!r.error) start();
+  })();
+</script>
+</body>
+</html>

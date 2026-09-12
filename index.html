@@ -2,181 +2,494 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- зум не блокируем: протокол читают в шуме, на бегу и не всегда своими глазами -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Кроссфит-платформа</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <style>
+    /*
+      Хром бесцветный — цвет приносит организатор.
+      Четыре нейтрали + два цвета, у каждого ровно одна работа:
+      live — «идёт сейчас», accent — фирменный, он же «это вы».
+      Больше цвета в интерфейсе нет. Крупные цветные пятна на экране —
+      только афиши организатора.
+    */
     :root {
-      --bg:#0e0f12; --surface:#16181d; --surface2:#1d2027; --border:#2a2e37;
-      --text:#f2f3f5; --hint:#8b909c; --gold:#f2c440; --accent:#e0533d; --green:#3fae6b;
+      --void:#08090a;      /* фон: достаточно глубокий, чтобы тёмные афиши сходились без шва */
+      --plate:#131417;     /* единственная поднятая поверхность */
+      --chalk:#f2f1ee;     /* основной текст */
+      --steel:#7c828b;     /* метаданные, подписи, неактивное */
+      --live:#ff3b30;      /* только состояние «идёт сейчас» */
+      /* фирменный акцент. Он же маркер «это ты»: палитра не растёт,
+         а у цвета остаётся одна работа — «это платформа и это вы» */
+      --accent:#a8cc3a;
+      --hair:rgba(255,255,255,.07);
+      --pad:20px;
+      --bar:52px;
+      --tabs:calc(60px + env(safe-area-inset-bottom,0px));
     }
     * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
     body {
-      font-family:'Inter',sans-serif; background:var(--bg); color:var(--text);
-      min-height:100vh; padding-bottom:calc(74px + env(safe-area-inset-bottom,0px));
+      font-family:'Onest',-apple-system,'Segoe UI',Roboto,sans-serif;
+      background:var(--void); color:var(--chalk);
+      font-size:15px; line-height:1.5; letter-spacing:-.01em;
+      min-height:100vh; padding-bottom:var(--tabs);
+      -webkit-font-smoothing:antialiased;
+      /* без этого протяжка вниз схлопывает мини-апп вместо прокрутки списка */
+      overscroll-behavior-y:contain;
     }
-    .osw { font-family:'Oswald',sans-serif; }
+    button, input, select { font:inherit; letter-spacing:inherit; color:inherit; }
+    .pad { padding-left:var(--pad); padding-right:var(--pad); }
+    /* табличные цифры — только там, где числа стоят в колонку и их сравнивают.
+       В крупном заголовке они дают дырку между «1» и «2», поэтому там не нужны. */
+    .num { font-variant-numeric:tabular-nums; }
 
-    /* Шапка */
-    .appbar { display:flex; align-items:center; justify-content:space-between;
-      padding:14px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:5; }
-    .appbar .brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:16px;
-      letter-spacing:1px; text-transform:uppercase; }
-    .appbar .brand span { color:var(--gold); }
-    .appbar .avatar { width:32px; height:32px; border-radius:50%; background:var(--surface2);
-      display:flex; align-items:center; justify-content:center; overflow:hidden;
-      font-family:'Oswald',sans-serif; font-size:12px; font-weight:700; color:var(--hint); }
-    .appbar .avatar img { width:100%; height:100%; object-fit:cover; }
+    /* ── Шапка ── */
+    .bar { position:sticky; top:0; z-index:10; height:var(--bar);
+      display:flex; align-items:center; gap:12px; padding:0 var(--pad);
+      background:var(--void); }
+    .bar.shifted { box-shadow:0 1px 0 var(--hair); }
+    .bar h2 { font-size:15px; font-weight:700; line-height:1.2;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .brand { font-size:15px; font-weight:700; color:var(--accent); }
+    .back { flex:none; width:44px; height:44px; margin-left:-12px; border:none;
+      background:none; display:grid; place-items:center; cursor:pointer; }
+    .ava { flex:none; width:32px; height:32px; border-radius:50%; background:var(--plate);
+      margin-left:auto; display:grid; place-items:center; overflow:hidden;
+      font-size:12px; font-weight:700; color:var(--steel); }
+    .ava img { width:100%; height:100%; object-fit:cover; }
 
-    .screen { display:none; padding:16px; }
+    .screen { display:none; }
     .screen.visible { display:block; }
-    .sec-title { font-family:'Oswald',sans-serif; font-weight:700; font-size:12px;
-      letter-spacing:1.5px; text-transform:uppercase; color:var(--hint); margin:2px 2px 12px; }
+    /* авторский display сильнее браузерного [hidden]{display:none},
+       поэтому атрибут hidden приходится включать явно */
+    [hidden] { display:none !important; }
 
-    /* Карточка события */
-    .ev-card { background:var(--surface); border:1px solid var(--border); border-radius:16px;
-      margin-bottom:12px; overflow:hidden; cursor:pointer; transition:border-color .12s, transform .12s; }
-    .ev-card:active { transform:scale(0.99); border-color:var(--gold); }
-    .ev-cover { height:96px; background:linear-gradient(135deg,#1d2027,#111318);
-      display:flex; align-items:center; justify-content:center; }
-    .ev-cover img { width:100%; height:100%; object-fit:cover; }
-    .ev-cover .ph { font-family:'Oswald',sans-serif; font-size:26px; font-weight:700; color:var(--border); letter-spacing:2px; }
-    .ev-body { padding:13px 14px 14px; }
-    .ev-title { font-family:'Oswald',sans-serif; font-weight:700; font-size:17px;
-      text-transform:uppercase; letter-spacing:.4px; line-height:1.2; }
-    .ev-meta { font-size:12px; color:var(--hint); margin-top:5px; }
-    .ev-foot { display:flex; align-items:center; justify-content:space-between; margin-top:11px; gap:10px; }
-    .ev-count { font-family:'Oswald',sans-serif; font-weight:700; font-size:14px; }
-    .ev-count small { font-family:'Inter',sans-serif; font-weight:400; font-size:11px; color:var(--hint); margin-left:4px; }
-    .ev-price { font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; color:var(--gold); margin-top:3px; }
-    .div-price { font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; color:var(--gold); margin-top:6px; }
-    .div-price span { font-family:'Inter',sans-serif; font-weight:400; font-size:11px; color:var(--hint); }
+    /* ── Сегменты: текст с подчёркиванием активного ── */
+    .segs { display:flex; gap:22px; padding:0 var(--pad);
+      box-shadow:inset 0 -1px 0 var(--hair); overflow-x:auto;
+      scrollbar-width:none; -ms-overflow-style:none; }
+    .segs::-webkit-scrollbar { display:none; }
+    .seg { background:none; border:none; cursor:pointer; padding:11px 0 13px;
+      min-height:44px; white-space:nowrap;
+      font-size:15px; font-weight:500; color:var(--steel);
+      border-bottom:2px solid transparent; margin-bottom:-1px; }
+    .seg[aria-selected="true"] { color:var(--accent); font-weight:700; border-bottom-color:var(--accent); }
+    .seg b { font-weight:inherit; color:var(--steel); margin-left:5px; font-size:13px; }
 
-    .badge { font-family:'Oswald',sans-serif; font-size:10px; font-weight:600; letter-spacing:1px;
-      text-transform:uppercase; padding:5px 9px; border-radius:7px; white-space:nowrap; }
-    .badge.reg { background:var(--gold); color:#1a1a1a; }
-    .badge.live { background:var(--green); color:#08210f; }
-    .badge.done { background:var(--surface2); color:var(--hint); border:1px solid var(--border); }
+    /* ── Слайдеры ── */
+    .rail { display:flex; gap:12px; overflow-x:auto; padding:14px var(--pad) 4px;
+      scroll-snap-type:x mandatory; scrollbar-width:none; -ms-overflow-style:none;
+      /* без scroll-padding первая карточка прилипает к краю экрана и съедает
+         поле в 20px: снап считает от границы контейнера, а не от padding */
+      scroll-padding-left:var(--pad); }
+    .rail::-webkit-scrollbar { display:none; }
+    .card { flex:none; width:calc(100vw - 84px); max-width:300px; scroll-snap-align:start;
+      background:none; border:none; padding:0; text-align:left; cursor:pointer; }
+    .card .art { border-radius:12px; }
+    .card-title { font-size:16px; font-weight:700; line-height:1.25; letter-spacing:-.02em;
+      margin-top:9px; }
+    .card .state { margin-top:2px; }
+    .card .meta { font-size:12px; }
 
-    /* Экран события */
-    .back-btn { background:none; border:none; color:var(--text); font-size:22px; cursor:pointer; padding:0 8px 10px 0; }
-    .ev-hero { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:14px; }
-    .ev-hero h1 { font-family:'Oswald',sans-serif; font-size:21px; font-weight:700;
-      text-transform:uppercase; letter-spacing:.5px; line-height:1.15; }
-    .ev-hero .sub { font-size:13px; color:var(--hint); margin-top:7px; line-height:1.5; }
-    .ev-hero .desc { font-size:13px; margin-top:11px; line-height:1.55; white-space:pre-line; }
+    /* новостной слайдер идёт во всю ширину: это главный экран, а не карточки */
+    .hero-rail { display:flex; overflow-x:auto; scroll-snap-type:x mandatory;
+      scrollbar-width:none; -ms-overflow-style:none; }
+    .hero-rail::-webkit-scrollbar { display:none; }
+    .slide { flex:none; width:100vw; scroll-snap-align:start; background:none;
+      border:none; padding:0 0 2px; text-align:left; cursor:pointer; }
+    .slide .art { aspect-ratio:16/9; }
+    .slide-txt { padding:13px var(--pad) 0; }
+    .slide-title { font-size:19px; font-weight:700; line-height:1.25; letter-spacing:-.02em; }
+    .dots { display:flex; gap:6px; justify-content:center; padding:14px 0 2px; }
+    .dots i { width:6px; height:6px; border-radius:50%; background:var(--steel); opacity:.4; }
+    .dots i.on { background:var(--accent); opacity:1; }
 
-    /* Баннер события */
-    .ev-banner { border-radius:16px; overflow:hidden; margin-bottom:14px; background:var(--surface2); }
-    .ev-banner img { width:100%; display:block; aspect-ratio:16/7; object-fit:cover; }
+    /* ── Лента поиска: карточек нет, строку отбивает сама афиша ── */
+    .feed-item { display:block; width:100%; text-align:left; background:none; border:none;
+      cursor:pointer; padding:0 0 30px; }
+    .art { position:relative; width:100%; aspect-ratio:16/9; background:var(--plate);
+      display:grid; place-items:center; overflow:hidden; }
+    .art img { width:100%; height:100%; object-fit:cover; display:block; }
+    /* афиши нет — типографическая плашка, не градиент: лента остаётся монохромной */
+    .art .stub { font-size:22px; font-weight:800; letter-spacing:-.02em; color:#3d4149;
+      padding:0 24px; text-align:center; line-height:1.15; }
+    .card .stub, .news-thumb .stub { font-size:15px; }
+    .feed-txt { padding:14px var(--pad) 0; }
+    .state { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--steel); }
+    .dot { flex:none; display:inline-block; vertical-align:middle;
+      width:6px; height:6px; border-radius:50%; background:var(--steel); }
+    .dot.live { background:var(--live); }
+    .dot.open { background:var(--chalk); }
+    .dot.you  { background:var(--accent); }
+    .feed-title { font-size:21px; font-weight:700; line-height:1.2; letter-spacing:-.02em; margin-top:5px; }
+    .meta { font-size:13px; color:var(--steel); margin-top:4px; }
+    .mine { font-size:13px; color:var(--accent); margin-top:6px; display:flex; align-items:center; gap:7px; }
 
-    /* Счётчики: атлеты / заявки / дивизионы */
-    .stat-row { display:flex; gap:10px; margin-bottom:14px; }
-    .stat { flex:1; background:var(--surface); border:1px solid var(--border); border-radius:14px;
-      padding:12px 10px; text-align:center; }
-    .stat b { display:block; font-family:'Oswald',sans-serif; font-weight:700; font-size:22px; color:var(--gold); line-height:1; }
-    .stat span { display:block; font-size:10px; letter-spacing:.5px; text-transform:uppercase; color:var(--hint); margin-top:5px; }
+    /* ── Категории участия ── */
+    /* Уровни равны по весу: это набор доступных категорий, а не рейтинг.
+       Различать их цветом нельзя — цвет на экране принадлежит организатору. */
+    .tags { display:flex; align-items:center; justify-content:space-between;
+      gap:12px; margin-top:10px; }
+    .tag-set { display:flex; gap:6px; flex-wrap:wrap; }
+    .tag { font-size:11px; font-weight:600; color:var(--chalk); background:var(--plate);
+      border-radius:6px; padding:4px 7px; line-height:1.2; letter-spacing:0; }
+    .tag-price { flex:none; font-size:13px; color:var(--steel); }
+    .tags.sm { margin-top:8px; }
+    .tags.sm .tag { font-size:10px; padding:3px 6px; }
+    .tags.sm .tag-price { font-size:12px; }
 
-    /* Даты */
-    .dt-box { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:4px 14px; margin-bottom:14px; }
-    .dt-row { display:flex; justify-content:space-between; align-items:baseline; gap:12px;
-      padding:11px 0; border-bottom:1px solid var(--border); font-size:13px; color:var(--hint); }
-    .dt-row:last-child { border-bottom:none; }
-    .dt-row b { font-family:'Oswald',sans-serif; font-weight:600; font-size:14px; color:var(--text); text-align:right; }
+    /* ── Строка поиска ── */
+    .find { display:flex; gap:10px; padding:6px var(--pad) 12px; }
+    .find-box { flex:1; position:relative; }
+    .find-box input { width:100%; min-height:44px; padding:0 14px 0 42px; border:none;
+      border-radius:10px; background:var(--plate); font-size:15px; }
+    .find-box svg { position:absolute; left:13px; top:50%; transform:translateY(-50%);
+      width:18px; height:18px; color:var(--steel); pointer-events:none; }
+    .find-btn { flex:none; min-width:44px; min-height:44px; border:none; border-radius:10px;
+      background:var(--plate); color:var(--chalk); cursor:pointer; display:grid;
+      place-items:center; padding:0 12px; font-size:14px; font-weight:500; }
+    .find-btn.on { background:var(--chalk); color:var(--void); }
 
-    /* Соцсети */
-    .soc-row { display:flex; gap:10px; margin-bottom:14px; }
-    .soc { flex:1; text-align:center; text-decoration:none; background:var(--surface);
-      border:1px solid var(--border); border-radius:12px; padding:12px 10px;
-      font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; letter-spacing:.5px;
-      text-transform:uppercase; color:var(--text); }
-    .soc:active { border-color:var(--gold); }
+    /* ── Новости ── */
+    .news-row { display:flex; gap:14px; width:100%; text-align:left; align-items:flex-start;
+      padding:16px var(--pad); border:none; background:none; cursor:pointer;
+      box-shadow:inset 0 -1px 0 var(--hair); }
+    .news-thumb { flex:none; width:96px; aspect-ratio:4/3; border-radius:10px;
+      overflow:hidden; background:var(--plate); display:grid; place-items:center; }
+    .news-thumb img { width:100%; height:100%; object-fit:cover; }
+    .news-title { font-size:16px; font-weight:700; line-height:1.28; letter-spacing:-.02em; }
+    .news-sum { font-size:13px; color:var(--steel); margin-top:5px; }
+    .news-date { font-size:12px; color:var(--steel); margin-top:6px; }
+    .article h1 { font-size:26px; font-weight:700; line-height:1.18; letter-spacing:-.025em;
+      padding:18px var(--pad) 0; }
+    .article .news-date { padding:0 var(--pad); margin-top:10px; }
+    .article p { font-size:16px; line-height:1.6; padding:16px var(--pad) 0; white-space:pre-line; }
+    .article .lead { color:var(--steel); }
 
-    .div-card { background:var(--surface); border:1px solid var(--border); border-radius:14px;
-      padding:13px 14px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .div-name { font-family:'Oswald',sans-serif; font-weight:600; font-size:15px; text-transform:uppercase; letter-spacing:.3px; }
-    .div-meta { font-size:11px; color:var(--hint); margin-top:4px; }
-    .div-count { font-family:'Oswald',sans-serif; font-weight:700; font-size:16px; color:var(--gold); flex:none; }
+    /* ── Экран события ── */
+    .ev-head { padding:18px var(--pad) 0; }
+    .mark { width:56px; height:56px; border-radius:50%; background:var(--plate);
+      display:grid; place-items:center; overflow:hidden;
+      font-size:19px; font-weight:800; color:var(--steel); }
+    .mark img { width:100%; height:100%; object-fit:cover; }
+    .mark.sm { width:44px; height:44px; flex:none; font-size:15px; }
+    .ev-title { font-size:26px; font-weight:700; line-height:1.15; letter-spacing:-.025em; margin-top:14px; }
+    .ev-place { font-size:15px; color:var(--steel); margin-top:6px; }
+    .ev-desc { font-size:15px; color:var(--chalk); margin-top:16px; white-space:pre-line; }
 
-    .btn { width:100%; font-family:'Oswald',sans-serif; font-weight:600; letter-spacing:.5px;
-      text-transform:uppercase; font-size:14px; background:var(--gold); color:#1a1a1a;
-      border:none; border-radius:12px; padding:14px; cursor:pointer; }
-    .btn:active { transform:scale(0.99); }
-    .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--border); }
+    /* ── Мои соревнования ── */
+    .my-row { display:flex; align-items:flex-start; gap:14px; width:100%; text-align:left;
+      padding:16px var(--pad); border:none; background:none; cursor:pointer;
+      box-shadow:inset 0 -1px 0 var(--hair); }
+    .my-title { font-size:17px; font-weight:700; line-height:1.25; letter-spacing:-.02em; }
 
-    /* Профиль */
-    .prof-head { display:flex; align-items:center; gap:14px; background:var(--surface);
-      border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:14px; }
-    .prof-ava { width:64px; height:64px; border-radius:50%; background:var(--surface2); flex:none;
-      display:flex; align-items:center; justify-content:center; overflow:hidden;
-      font-family:'Oswald',sans-serif; font-weight:700; font-size:20px; color:var(--hint); }
+    /* одно число на экран: главный факт состояния */
+    .hero { padding:26px var(--pad) 0; }
+    .hero-label { font-size:13px; color:var(--steel); display:flex; align-items:center; gap:7px; }
+    .hero-label.live { color:var(--live); }
+    /* Значение бывает от «12 дней» до «14–15 февраля 2027» — кегль ступенями,
+       чтобы длинное не переносилось на вторую строку. */
+    .hero-value { font-size:52px; font-weight:800; line-height:1.02; letter-spacing:-.04em;
+      margin-top:8px; text-wrap:balance; }
+    .hero-value.long  { font-size:38px; letter-spacing:-.03em; }
+    .hero-value.xlong { font-size:28px; letter-spacing:-.02em; }
+
+    .rows { margin-top:8px; }
+    .row { display:flex; align-items:baseline; justify-content:space-between; gap:16px;
+      padding:15px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    .row-main { font-size:15px; font-weight:500; }
+    .row-sub { font-size:13px; color:var(--steel); margin-top:3px; }
+    .row-val { flex:none; font-size:15px; font-weight:500; }
+    .row-val.q { color:var(--steel); }
+
+    .h { font-size:15px; font-weight:700; padding:30px var(--pad) 10px;
+      display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+    .h span { font-size:13px; font-weight:400; color:var(--steel); }
+    .h.tight { padding-bottom:2px; }
+
+    .btn { display:block; width:100%; min-height:52px; border:none; border-radius:10px;
+      background:var(--chalk); color:var(--void); font-size:15px; font-weight:700; cursor:pointer; }
+    .btn:active { opacity:.85; }
+    /* нажатие должно быть видно на каждой цели, иначе список кажется мёртвым.
+       Гасим тоном, а не сдвигом: layout при нажатии не должен дёргаться */
+    .feed-item:active, .my-row:active, .news-row:active, .card:active, .slide:active,
+    .opt:not([disabled]):active, .seg:active, .tab:active, .links a:active {
+      background:rgba(255,255,255,.05); }
+    .btn.quiet { background:var(--plate); color:var(--chalk); }
+    /* неактивная кнопка не должна выглядеть тяжелее соседней активной,
+       поэтому гасим её тоном, а не прозрачностью */
+    .btn[disabled] { background:var(--plate); color:var(--steel); cursor:default; }
+    /* на шторке поверхность уже --plate, поэтому неактивная кнопка уходит
+       в обратную сторону — иначе она пропадает и читается как подпись */
+    .sheet .btn[disabled] { background:var(--void); }
+    /* второстепенное действие текстом: на поднятой поверхности заливка --plate
+       сливается с фоном, а у подтверждения снятия это ещё и верная иерархия */
+    .btn.text { background:none; color:var(--steel); font-weight:500; }
+    .links { display:flex; gap:10px; }
+    .links a { flex:1; min-height:48px; border-radius:10px; background:var(--plate);
+      display:grid; place-items:center; text-decoration:none; color:var(--chalk);
+      font-size:15px; font-weight:500; }
+
+    /* ── Профиль ── */
+    .prof { display:flex; align-items:center; gap:16px; padding:8px var(--pad) 0; }
+    .prof-ava { position:relative; width:72px; height:72px; border-radius:50%;
+      background:var(--plate); flex:none; border:none; padding:0; cursor:pointer;
+      display:grid; place-items:center; overflow:hidden;
+      font-size:24px; font-weight:800; color:var(--steel); }
     .prof-ava img { width:100%; height:100%; object-fit:cover; }
-    .prof-name { font-family:'Oswald',sans-serif; font-weight:700; font-size:18px; text-transform:uppercase; }
-    .prof-sub { font-size:12px; color:var(--hint); margin-top:4px; }
-    .field { margin-bottom:12px; }
-    .field label { display:block; font-size:10px; letter-spacing:1px; text-transform:uppercase;
-      color:var(--hint); margin-bottom:6px; }
-    .field input, .field select { width:100%; padding:12px 14px; border-radius:12px;
-      border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px;
-      font-family:'Inter',sans-serif; }
-    .field input:focus, .field select:focus { outline:none; border-color:var(--gold); }
+    .prof-ava .cam { position:absolute; inset:auto 0 0 0; background:rgba(8,9,10,.72);
+      font-size:10px; font-weight:500; color:var(--chalk); padding:3px 0; letter-spacing:0; }
+    .prof-name { font-size:22px; font-weight:700; line-height:1.2; letter-spacing:-.02em; }
+    .prof-sub { font-size:14px; color:var(--steel); margin-top:3px; }
+    .field { padding:0 var(--pad) 14px; }
+    .field label { display:block; font-size:13px; color:var(--steel); margin-bottom:7px; }
+    .field input, .field select { width:100%; min-height:52px; padding:0 15px; border:none;
+      border-radius:10px; background:var(--plate); font-size:15px; appearance:none; }
+    /* appearance:none убирает системную стрелку — рисуем свою, иначе поле не
+       отличить от обычного ввода */
+    .field select { padding-right:44px; background-repeat:no-repeat;
+      background-position:right 16px center;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%237c828b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E"); }
+    .field input:focus, .field select:focus { outline:2px solid var(--steel); outline-offset:-2px; }
+    :focus-visible { outline:2px solid var(--chalk); outline-offset:2px; border-radius:4px; }
+    .pair { display:flex; gap:12px; }
+    .pair .field { flex:1; padding-left:0; padding-right:0; }
+    .pair-wrap { padding:0 var(--pad); }
 
-    /* Нижнее меню */
-    .tabs { position:fixed; bottom:0; left:0; right:0; z-index:20; background:var(--surface);
-      display:flex; gap:6px; border-top:1px solid var(--border);
-      padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px)); }
-    .tab { flex:1; cursor:pointer; color:var(--hint); background:none; border:none; border-radius:11px;
-      padding:10px 2px; font-family:'Oswald',sans-serif; font-size:11px; font-weight:600;
-      letter-spacing:.3px; text-transform:uppercase; transition:background .12s,color .12s; }
-    .tab.active { background:var(--gold); color:#1a1a1a; }
-    .tab:active { transform:scale(0.97); }
+    /* ── Нижнее меню ── */
+    .tabs { position:fixed; bottom:0; left:0; right:0; z-index:20; display:flex;
+      background:var(--void); box-shadow:inset 0 1px 0 var(--hair);
+      padding-bottom:env(safe-area-inset-bottom,0px); }
+    .tab { flex:1; min-height:60px; border:none; background:none; cursor:pointer;
+      display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+      color:var(--steel); font-size:10px; font-weight:500; letter-spacing:0; }
+    .tab svg { width:22px; height:22px; }
+    .tab[aria-current="page"] { color:var(--accent); }
 
-    .empty { text-align:center; color:var(--hint); padding:48px 16px; font-size:14px; line-height:1.6; }
-    .empty b { color:var(--text); display:block; margin-bottom:6px; font-family:'Oswald',sans-serif;
-      font-size:15px; text-transform:uppercase; }
-    .toast { position:fixed; bottom:86px; left:50%; transform:translateX(-50%); background:var(--green);
-      color:#08210f; font-weight:600; font-size:13px; padding:10px 18px; border-radius:10px;
-      opacity:0; transition:opacity .2s; pointer-events:none; z-index:30; }
+    /* ── Заявка ── */
+    .entry { margin:0 var(--pad); background:var(--plate); border-radius:12px; padding:16px; }
+    .entry-top { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--accent); }
+    .entry-div { font-size:19px; font-weight:700; letter-spacing:-.02em; margin-top:7px; }
+    .entry-act { margin-top:6px; }
+    .entry-act button { background:none; border:none; cursor:pointer;
+      min-height:44px; padding:0 2px; margin-left:-2px;
+      font-size:14px; color:var(--steel); text-decoration:underline;
+      text-underline-offset:4px; }
+    .notice { margin:0 var(--pad); background:var(--plate); border-radius:12px;
+      padding:16px; font-size:14px; color:var(--steel); }
+    .notice b { display:block; color:var(--chalk); font-weight:500;
+      font-size:15px; margin-bottom:5px; }
+    .notice button { margin-top:12px; }
+
+    /* ── Шторка ── */
+    /* страница и шторка почти одного тона, поэтому затемнение сильное,
+       а сама шторка стоит на поднятой поверхности */
+    .scrim { position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.78);
+      opacity:0; transition:opacity .18s; }
+    .scrim.on { opacity:1; }
+    .sheet { position:fixed; left:0; right:0; bottom:0; z-index:41; background:var(--plate);
+      border-radius:18px 18px 0 0; box-shadow:0 -1px 0 var(--hair);
+      padding-bottom:env(safe-area-inset-bottom,0px);
+      max-height:88vh; overflow-y:auto;
+      transform:translateY(100%); transition:transform .22s cubic-bezier(.2,.7,.3,1); }
+    .sheet.on { transform:none; }
+    .sheet h3 { font-size:19px; font-weight:700; letter-spacing:-.02em;
+      padding:22px var(--pad) 4px; }
+    .sheet p { font-size:14px; color:var(--steel); padding:0 var(--pad) 8px; }
+    .sheet .h { padding:18px var(--pad) 6px; }
+    .sheet-foot { padding:14px var(--pad) 22px; display:grid; gap:10px; }
+    .opt { display:flex; align-items:center; justify-content:space-between; gap:14px;
+      width:100%; text-align:left; background:none; border:none; cursor:pointer;
+      padding:15px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    .opt[disabled] { cursor:default; }
+    .opt[disabled] .opt-name { color:var(--steel); }
+    .opt-name { font-size:15px; font-weight:500; }
+    .opt-sub { font-size:13px; color:var(--steel); margin-top:3px; }
+    .opt-why { font-size:13px; color:var(--steel); flex:none; }
+    .tick { flex:none; width:22px; height:22px; border-radius:50%;
+      box-shadow:inset 0 0 0 1.5px var(--steel); }
+    .opt[aria-checked="true"] .tick { background:var(--chalk); box-shadow:none; }
+    .opt[aria-checked="true"] .tick::after { content:'✓'; display:block; color:var(--void);
+      font-size:13px; font-weight:700; line-height:22px; text-align:center; }
+
+    .err { font-size:13px; color:var(--live); margin-top:7px; }
+    .field input.bad, .field select.bad { outline:1.5px solid var(--live); outline-offset:-1.5px; }
+
+    /* ── Турнирный слой ── */
+    .segs.sticky { position:sticky; top:var(--bar); z-index:9; background:var(--void); }
+
+    /* строка выбора дивизиона + прогресс комплексов */
+    .pick { display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding:14px var(--pad) 10px; }
+    .pick button { display:flex; align-items:center; gap:7px; background:none; border:none;
+      padding:0; cursor:pointer; min-height:44px; font-size:17px; font-weight:700;
+      letter-spacing:-.02em; color:var(--chalk); text-align:left; }
+    .pick svg { width:12px; height:8px; flex:none; color:var(--steel); }
+    .pick .prog { flex:none; font-size:13px; color:var(--steel); }
+
+    /* ── Протокол ── */
+    .lb-row { display:grid; grid-template-columns:34px 36px 1fr auto 20px; align-items:center;
+      gap:10px; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+      padding:12px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    /* своя строка: полоса акцентом слева, а не заливка всей строки —
+       протокол должен оставаться читаемой таблицей, а не подсветкой */
+    .lb-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
+    .lb-place { font-size:19px; font-weight:700; color:var(--steel); font-variant-numeric:tabular-nums; }
+    .lb-row.is-me .lb-place { color:var(--accent); }
+    .lb-ava { width:36px; height:36px; border-radius:50%; background:var(--plate); overflow:hidden;
+      display:grid; place-items:center; font-size:12px; font-weight:700; color:var(--steel); }
+    .lb-ava img { width:100%; height:100%; object-fit:cover; }
+    .lb-name { font-size:16px; font-weight:500; line-height:1.2; }
+    .lb-sub { font-size:12px; color:var(--steel); margin-top:2px; }
+    .lb-pts { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+    .lb-chev { color:var(--steel); display:grid; place-items:center; transition:transform .15s; }
+    .lb-item.open .lb-chev { transform:rotate(180deg); }
+    .lb-detail { display:none; padding:2px var(--pad) 14px; }
+    .lb-item.open .lb-detail { display:block; }
+    .lb-item.open .lb-row { box-shadow:none; }
+    .lb-item.open { box-shadow:inset 0 -1px 0 var(--hair); }
+    .pw { display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+      padding:9px 0 9px 44px; }
+    .pw-name { font-size:14px; }
+    .pw-res { font-size:14px; color:var(--steel); font-variant-numeric:tabular-nums; }
+    .pw-res b { color:var(--chalk); font-weight:500; }
+
+    /* своя строка уехала из виду — прижимаем копию к низу */
+    .lb-pinned { position:fixed; left:0; right:0; bottom:var(--tabs); z-index:15;
+      background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), 0 -1px 0 var(--hair);
+      display:grid; grid-template-columns:34px 1fr auto; align-items:center; gap:10px;
+      padding:11px var(--pad); }
+    .lb-pinned[hidden] { display:none; }
+
+    /* ── Комплексы ── */
+    .acc { box-shadow:inset 0 -1px 0 var(--hair); }
+    .acc-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+      width:100%; text-align:left; background:none; border:none; cursor:pointer;
+      padding:16px var(--pad); }
+    .acc-name { font-size:17px; font-weight:700; letter-spacing:-.02em; }
+    .acc-meta { font-size:13px; color:var(--steel); margin-top:3px; }
+    .acc-body { display:none; padding:0 var(--pad) 18px; }
+    .acc.open .acc-body { display:block; }
+    .acc.open .acc-chev { transform:rotate(180deg); }
+    .acc-chev { flex:none; color:var(--steel); display:grid; place-items:center; transition:transform .15s; }
+    .acc-desc { font-size:15px; line-height:1.55; white-space:pre-line; }
+    .acc-score { display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+      margin-top:14px; padding-top:12px; box-shadow:inset 0 1px 0 var(--hair);
+      font-size:13px; color:var(--steel); }
+
+    /* ── Расписание ── */
+    .sch-row { display:flex; align-items:baseline; gap:14px;
+      padding:14px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    .sch-time { flex:none; width:48px; font-size:15px; font-weight:700;
+      font-variant-numeric:tabular-nums; }
+    .sch-title { font-size:15px; font-weight:500; }
+
+    /* ── Заходы ── */
+    .heat-row { display:flex; align-items:center; justify-content:space-between; gap:12px;
+      width:100%; text-align:left; background:none; border:none; cursor:pointer;
+      padding:14px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    .heat-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
+    .heat-num { font-size:17px; font-weight:700; }
+    .heat-time { flex:none; font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
+    .phase { margin:16px var(--pad) 0; background:var(--plate); border-radius:12px; padding:15px 16px; }
+    .phase-label { font-size:13px; color:var(--steel); }
+    .phase-line { display:flex; align-items:center; gap:12px; margin-top:8px; }
+    .phase-time { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+    .phase-bar { flex:1; height:1px; background:var(--hair); position:relative; }
+    .phase-bar::after { content:''; position:absolute; right:0; top:-3px; width:7px; height:7px;
+      border-top:1px solid var(--steel); border-right:1px solid var(--steel); transform:rotate(45deg); }
+    .hs { margin:10px var(--pad) 0; background:var(--plate); border-radius:12px;
+      padding:20px 16px; text-align:center; }
+    .hs-label { font-size:13px; color:var(--steel); }
+    .hs-time { font-size:48px; font-weight:800; line-height:1; letter-spacing:-.04em; margin-top:8px; }
+    .lane-row { display:grid; grid-template-columns:28px 36px 1fr; align-items:center; gap:12px;
+      padding:12px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
+    .lane-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
+    .lane-num { font-size:15px; color:var(--steel); font-variant-numeric:tabular-nums; }
+
+    .note { padding:56px var(--pad); text-align:center; color:var(--steel); font-size:15px; }
+    .note.tight { padding:28px var(--pad); }
+    .sk { background:var(--plate); border-radius:8px; }
+    .toast { position:fixed; left:50%; bottom:calc(var(--tabs) + 16px); transform:translateX(-50%);
+      background:var(--chalk); color:var(--void); font-size:14px; font-weight:500;
+      padding:11px 18px; border-radius:10px; opacity:0; transition:opacity .18s;
+      pointer-events:none; z-index:30; max-width:calc(100% - 40px); }
     .toast.show { opacity:1; }
+
+    @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
   </style>
 </head>
 <body>
-  <header class="appbar">
-    <div class="brand">Кроссфит<span>·</span>Платформа</div>
-    <div class="avatar" id="top-ava">—</div>
-  </header>
+  <header class="bar" id="bar"></header>
 
-  <!-- СОБЫТИЯ -->
-  <section class="screen visible" id="screen-events">
-    <div class="sec-title">Соревнования</div>
+  <section class="screen visible" id="screen-home">
+    <div id="home-news"></div>
+    <div class="h tight">Соревнования</div>
+    <div class="segs" id="home-segs"></div>
+    <div id="home-events"></div>
+    <div class="h">Прошедшие</div>
+    <div id="home-past"></div>
+    <div style="height:24px"></div>
+  </section>
+
+  <section class="screen" id="screen-search">
+    <div class="find">
+      <div class="find-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+        <input id="q" type="search" placeholder="Название или город"
+               autocomplete="off" enterkeyhint="search" aria-label="Поиск соревнований" />
+      </div>
+      <button class="find-btn" id="filter-btn" aria-label="Фильтры">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 7h16M7 12h10M10 17h4"/></svg>
+      </button>
+    </div>
+    <div class="segs" id="segs"></div>
     <div id="events-list"></div>
   </section>
 
-  <!-- СОБЫТИЕ -->
   <section class="screen" id="screen-event">
-    <button class="back-btn" id="event-back">‹</button>
+    <div class="segs sticky" id="ev-segs" hidden></div>
     <div id="event-body"></div>
+    <div class="lb-pinned" id="lb-pinned" hidden></div>
   </section>
-
-  <!-- МОИ -->
-  <section class="screen" id="screen-my">
-    <div class="sec-title">Мои соревнования</div>
-    <div id="my-list"></div>
-  </section>
-
-  <!-- ПРОФИЛЬ -->
-  <section class="screen" id="screen-profile">
-    <div id="profile-body"></div>
-  </section>
+  <section class="screen" id="screen-my"><div id="my-list"></div></section>
+  <section class="screen" id="screen-news"><div id="news-list"></div></section>
+  <section class="screen" id="screen-article"><div id="article-body"></div></section>
+  <section class="screen" id="screen-profile"><div id="profile-body"></div></section>
 
   <nav class="tabs">
-    <button class="tab active" data-screen="events">События</button>
-    <button class="tab" data-screen="my">Мои</button>
-    <button class="tab" data-screen="profile">Профиль</button>
+    <button class="tab" data-screen="home" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+      Главная</button>
+    <button class="tab" data-screen="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+      Поиск</button>
+    <button class="tab" data-screen="my">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M6 4h12v17l-6-4.5L6 21z"/></svg>
+      Мои</button>
+    <button class="tab" data-screen="news">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M4 5h12v14H5a1 1 0 0 1-1-1z"/><path d="M16 9h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-3"/>
+        <path d="M7 9h6M7 13h6"/></svg>
+      Новости</button>
+    <button class="tab" data-screen="profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+      Профиль</button>
   </nav>
 
   <div class="toast" id="toast"></div>
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" hidden></div>
+  <input type="file" id="photo-input" accept="image/*" hidden />
 
   <script>
     const tg = window.Telegram?.WebApp;
@@ -196,8 +509,62 @@
         return await r.json();
       } catch (e) { return {error:'net'}; }
     }
+    const send = (path, method, body) =>
+      api(path, {method, body: body === undefined ? undefined : JSON.stringify(body)});
 
+    // Коды сервера → то, что видит человек. Говорим, что случилось и что делать.
+    const REASONS = {
+      profile_incomplete:   'Сначала заполните имя и пол в профиле.',
+      registration_closed:  'Регистрация на этот старт уже закрыта.',
+      division_not_found:   'Этот дивизион больше не доступен. Обновите экран.',
+      team_division:        'В командный дивизион заявку подаёт капитан — пока только через организатора.',
+      gender_mismatch:      'Этот дивизион для другого пола.',
+      already_registered:   'Вы уже заявлены на этот старт.',
+      division_full:        'В дивизионе не осталось мест.',
+      too_late:             'Снять заявку можно только пока идёт регистрация.',
+      no_entry:             'Заявки на этот старт у вас нет.',
+      unauthorized:         'Откройте приложение через Telegram.',
+      bad_format:           'Подойдёт JPEG или PNG.',
+      too_big:              'Файл слишком большой.',
+      net:                  'Нет связи с сервером. Попробуйте ещё раз.',
+    };
+    const reason = e => REASONS[e] || 'Не получилось. Попробуйте ещё раз.';
+
+    // ── Шторка ──
+    let sheetReturn = null;
+    // returnTo — кнопка, вызвавшая шторку: на неё возвращаем фокус при закрытии.
+    // Одного activeElement мало: нажатие пальцем фокус не ставит.
+    function openSheet(html, returnTo) {
+      const sh = $('sheet'), sc = $('scrim');
+      sheetReturn = returnTo || document.activeElement;
+      sh.innerHTML = html;
+      sc.hidden = false; sh.hidden = false;
+      sh.querySelector('h3')?.setAttribute('id', 'sheet-title');
+      sh.setAttribute('aria-labelledby', 'sheet-title');
+      requestAnimationFrame(() => {
+        sc.classList.add('on'); sh.classList.add('on');
+        sh.querySelector('button:not([disabled])')?.focus();
+      });
+    }
+    function closeSheet() {
+      const sh = $('sheet'), sc = $('scrim');
+      sh.classList.remove('on'); sc.classList.remove('on');
+      setTimeout(() => { sh.hidden = true; sc.hidden = true; sh.innerHTML = ''; }, 220);
+      sheetReturn?.focus?.();
+      sheetReturn = null;
+    }
+    $('scrim').onclick = closeSheet;
+    addEventListener('keydown', e => { if (e.key === 'Escape' && !$('sheet').hidden) closeSheet(); });
+
+    // ── Формат ──
     const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+    function plural(n, one, few, many) {
+      const a = Math.abs(n) % 100, b = a % 10;
+      if (a > 10 && a < 20) return many;
+      if (b > 1 && b < 5) return few;
+      if (b === 1) return one;
+      return many;
+    }
     function fmtDates(a, b) {
       if (!a) return '';
       const d1 = new Date(a), d2 = b ? new Date(b) : null;
@@ -206,12 +573,18 @@
       const day2 = d2.getDate(), m2 = MONTHS[d2.getMonth()];
       return m1 === m2 ? `${day1}–${day2} ${m1} ${y}` : `${day1} ${m1} — ${day2} ${m2} ${y}`;
     }
-    const STATUS = {
-      registration: ['reg','Регистрация'],
-      live:         ['live','Идёт сейчас'],
-      finished:     ['done','Завершено'],
+    // Год показываем, только если он не текущий: «до 20 июля» про следующий год
+    // читается как уже прошедший срок.
+    const fmtDay = s => {
+      const d = new Date(s), y = d.getFullYear();
+      const year = y === new Date().getFullYear() ? '' : ` ${y}`;
+      return `${d.getDate()} ${MONTHS[d.getMonth()]}${year}`;
     };
-    // Цена: 3500 → «3 500 ₽», 0 → «Бесплатно»
+    function daysLeft(s) {
+      if (!s) return null;
+      const today = new Date(); today.setHours(0,0,0,0);
+      return Math.round((new Date(s) - today) / 86400000);
+    }
     function money(v) {
       if (v === null || v === undefined) return '';
       if (!v) return 'Бесплатно';
@@ -222,188 +595,1086 @@
       if (!min && !max) return 'Бесплатно';
       return min === max ? money(min) : `от ${money(min)}`;
     }
-    function plural(n, one, few, many) {
-      const a = Math.abs(n) % 100, b = a % 10;
-      if (a > 10 && a < 20) return many;
-      if (b > 1 && b < 5) return few;
-      if (b === 1) return one;
-      return many;
+    // Внешний модуль хранит день строкой («8 августа»), свои таблицы — датой.
+    // Разбирать чужой формат не пытаемся: печатаем как пришло.
+    const fmtDayLoose = v =>
+      /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? fmtDates(v) : String(v || '');
+
+    function fmtNewsDate(iso) {
+      const d = new Date(iso), n = new Date();
+      const days = Math.round((n.setHours(0,0,0,0) - new Date(iso).setHours(0,0,0,0)) / 86400000);
+      if (days === 0) return 'Сегодня';
+      if (days === 1) return 'Вчера';
+      if (days < 7) return `${days} ${plural(days,'день','дня','дней')} назад`;
+      return fmtDay(iso);
     }
+
+    // Срок вместо даты: решение зависит от того, сколько осталось.
+    // Дальше 45 дней счёт в днях перестаёт помогать — показываем дату.
+    function stateLine(ev) {
+      if (ev.status === 'live')     return ['live', 'Идёт сейчас'];
+      if (ev.status === 'finished') return ['', 'Завершено'];
+      if (isAnnounced(ev))          return ['', `Регистрация с ${fmtDay(ev.reg_opens_at)}`];
+      const d = daysLeft(ev.reg_closes_at);
+      if (d === null)  return ['open', 'Регистрация открыта'];
+      if (d < 0)       return ['', 'Регистрация закрыта'];
+      if (d === 0)     return ['open', 'Регистрация закроется сегодня'];
+      if (d <= 45)     return ['open', `Регистрация закроется через ${d} ${plural(d,'день','дня','дней')}`];
+      return ['open', `Регистрация до ${fmtDay(ev.reg_closes_at)}`];
+    }
+
+    // Один факт на экран — тот, что важен в текущем состоянии события
+    function heroFact(ev) {
+      // Крупно — только данные. Статус живёт в мелкой подписи, иначе слово
+      // «Идёт сейчас» в дисплейном кегле перекрикивает весь экран.
+      if (ev.status === 'live')
+        return {label:'Идёт сейчас', value:fmtDates(ev.date_start, ev.date_end), live:true};
+      if (ev.status === 'finished')
+        return {label:'Завершено', value:fmtDates(ev.date_start, ev.date_end)};
+      if (isAnnounced(ev))
+        return {label:'Регистрация откроется', value:fmtDay(ev.reg_opens_at)};
+      const d = daysLeft(ev.reg_closes_at);
+      // регистрация уже закрылась, но событие ещё впереди — важен день старта
+      if (d === null || d < 0) return {label:'Старт', value:fmtDates(ev.date_start, ev.date_end)};
+      if (d === 0)     return {label:'До закрытия регистрации', value:'Сегодня'};
+      if (d <= 45)     return {label:'До закрытия регистрации', value:`${d} ${plural(d,'день','дня','дней')}`};
+      return {label:'Регистрация открыта до', value:fmtDay(ev.reg_closes_at)};
+    }
+
+    // «Анонс» — отдельного статуса в базе нет, он выводится из данных:
+    // событие опубликовано, но окно регистрации ещё не открылось.
+    const isAnnounced = ev =>
+      ev.status === 'registration' && ev.reg_opens_at && daysLeft(ev.reg_opens_at) > 0;
+    const isOpen = ev => ev.status === 'registration' && !isAnnounced(ev);
+    const isLive = ev => ev.status === 'live';
+    const isPast = ev => ev.status === 'finished';
+
+    // Порядок фиксированный, от простого к сильному — не алфавитный
+    const LEVELS = [['sc','Sc'], ['bg','Bg'], ['rx','Rx'], ['elite','Elite']];
+    function tagsRow(ev, small) {
+      const set = LEVELS.filter(([k]) => (ev.levels || []).includes(k))
+        .map(([, label]) => `<span class="tag">${label}</span>`).join('');
+      const price = ev.price_min === null || ev.price_min === undefined
+        ? '' : priceRange(ev.price_min, ev.price_max);
+      if (!set && !price) return '';
+      return `<div class="tags${small ? ' sm' : ''}">
+        <div class="tag-set">${set}</div>
+        ${price ? `<div class="tag-price">${esc(price)}</div>` : ''}
+      </div>`;
+    }
+
+    const markHTML = ev => ev.has_mark
+      ? `<img src="/api/event-mark/${ev.id}?v=${ev.mark_v}" alt="">`
+      : esc((ev.title||'').slice(0,1).toUpperCase());
+    const artHTML = ev => ev.has_banner
+      ? `<img src="/api/event-banner/${ev.id}?v=${ev.banner_v}" alt="" loading="lazy">`
+      : `<div class="stub" aria-hidden="true">${esc(ev.title)}</div>`;
 
     // ── Навигация ──
-    const SCREENS = ['events','event','my','profile'];
-    function show(name){
-      SCREENS.forEach(s => $('screen-'+s).classList.toggle('visible', s===name));
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.screen===name));
+    const SCREENS = ['home','search','event','my','news','article','profile'];
+    const TITLES  = {home:'Кроссфит-платформа', search:'Поиск', my:'Мои соревнования',
+                     news:'Новости', profile:'Профиль'};
+    let me = null, myIds = new Set();
+
+    function renderBar(name, innerTitle) {
+      const avatar = `<div class="ava">${me?.user?.avatar
+        ? `<img src="${esc(me.user.avatar)}" alt="">` : esc(initials(me?.user?.name))}</div>`;
+      if (name === 'event' || name === 'article') {
+        $('bar').innerHTML = `
+          <button class="back" id="go-back" aria-label="Назад">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 5l-7 7 7 7"/></svg>
+          </button>
+          <h2>${esc(innerTitle || '')}</h2>`;
+        $('go-back').onclick = () => show(backTo);
+      } else {
+        $('bar').innerHTML = `<div class="brand">${TITLES[name]}</div>${avatar}`;
+      }
+    }
+
+    let backTo = 'home';
+    function show(name, innerTitle) {
+      if (name !== 'event' && name !== 'article') backTo = name;
+      SCREENS.forEach(s => $('screen-'+s).classList.toggle('visible', s === name));
+      document.querySelectorAll('.tab').forEach(t => {
+        if (t.dataset.screen === name) t.setAttribute('aria-current','page');
+        else t.removeAttribute('aria-current');
+      });
+      if (name !== 'event') { $('ev-segs').hidden = true; $('lb-pinned').hidden = true; }
+      renderBar(name, innerTitle);
       window.scrollTo(0,0);
-      if (name==='events') loadEvents();
-      if (name==='my') loadMy();
-      if (name==='profile') loadProfile();
+      if (name === 'home')    loadHome();
+      if (name === 'search')  loadSearch();
+      if (name === 'my')      loadMy();
+      if (name === 'news')    loadNews();
+      if (name === 'profile') loadProfile();
     }
     document.querySelectorAll('.tab').forEach(t => t.onclick = () => show(t.dataset.screen));
-    $('event-back').onclick = () => show('events');
+    addEventListener('scroll', () => $('bar').classList.toggle('shifted', scrollY > 4), {passive:true});
 
-    // ── Каталог событий ──
-    async function loadEvents(){
+    const skeleton = n => Array.from({length:n}, () => `
+      <div style="padding:0 0 30px">
+        <div class="sk" style="aspect-ratio:16/9;border-radius:0"></div>
+        <div class="pad" style="padding-top:14px">
+          <div class="sk" style="height:13px;width:45%"></div>
+          <div class="sk" style="height:21px;width:75%;margin-top:9px"></div>
+          <div class="sk" style="height:13px;width:60%;margin-top:9px"></div>
+        </div>
+      </div>`).join('');
+    const railSkeleton = () => `
+      <div class="rail">${Array.from({length:2}, () => `
+        <div class="card">
+          <div class="sk" style="aspect-ratio:16/9;border-radius:12px"></div>
+          <div class="sk" style="height:16px;width:80%;margin-top:10px"></div>
+        </div>`).join('')}</div>`;
+
+    // ── Данные ──
+    let allEvents = null, allNews = null, clubs = null;
+    async function ensureEvents() {
+      if (!allEvents) {
+        const list = await api('/api/events');
+        allEvents = Array.isArray(list) ? list : [];
+      }
+      return allEvents;
+    }
+    async function refreshMe() {
+      me = await api('/api/me');
+      myIds = new Set((me?.my_events || []).map(e => e.id));
+    }
+
+    // ── Главная ──
+    const HOME_SEGS = [
+      ['open',  'Сбор заявок', isOpen],
+      ['live',  'Идут',        isLive],
+      ['anons', 'Анонсы',      isAnnounced],
+    ];
+    let homeSeg = 'open';
+
+    async function loadHome() {
+      if (!$('home-events').dataset.ready) {
+        $('home-news').innerHTML = railSkeleton();
+        $('home-events').innerHTML = railSkeleton();
+      }
+      await ensureEvents();
+      if (!allNews) {
+        const n = await api('/api/news?featured=1');
+        allNews = Array.isArray(n) ? n : [];
+      }
+      $('home-events').dataset.ready = '1';
+      renderHeroNews();
+      renderHomeSegs();
+      renderHomeRail();
+      renderPastRail();
+    }
+
+    function renderHeroNews() {
+      const box = $('home-news');
+      if (!allNews.length) { box.innerHTML = ''; return; }
+      box.innerHTML = `
+        <div class="hero-rail" id="hero-rail" aria-label="Главные новости">
+          ${allNews.map(n => `
+            <button class="slide" data-id="${n.id}">
+              <div class="art">${n.has_image
+                ? `<img src="/api/news-image/${n.id}?v=${n.image_v}" alt="">`
+                : `<div class="stub" aria-hidden="true">${esc(n.title)}</div>`}</div>
+              <div class="slide-txt">
+                <div class="meta" style="margin:0">${esc(fmtNewsDate(n.published_at))}</div>
+                <div class="slide-title">${esc(n.title)}</div>
+              </div>
+            </button>`).join('')}
+        </div>
+        ${allNews.length > 1
+          ? `<div class="dots" id="hero-dots">${allNews.map((_, i) =>
+              `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>` : ''}`;
+      box.querySelectorAll('.slide').forEach(s => s.onclick = () => openArticle(s.dataset.id));
+      const rail = $('hero-rail'), dots = $('hero-dots');
+      if (rail && dots) rail.addEventListener('scroll', () => {
+        const i = Math.round(rail.scrollLeft / rail.clientWidth);
+        dots.querySelectorAll('i').forEach((d, k) => d.classList.toggle('on', k === i));
+      }, {passive:true});
+    }
+
+    function renderHomeSegs() {
+      $('home-segs').innerHTML = HOME_SEGS.map(([key, label, test]) => {
+        const n = allEvents.filter(test).length;
+        return `<button class="seg" role="tab" data-seg="${key}" aria-selected="${key === homeSeg}">
+          ${label}${n ? `<b class="num">${n}</b>` : ''}</button>`;
+      }).join('');
+      $('home-segs').querySelectorAll('.seg').forEach(b => b.onclick = () => {
+        homeSeg = b.dataset.seg; renderHomeSegs(); renderHomeRail();
+      });
+    }
+
+    function cardHTML(ev) {
+      const [tone, text] = stateLine(ev);
+      return `
+        <button class="card" data-id="${ev.id}">
+          <div class="art">${artHTML(ev)}</div>
+          <div class="state"><i class="dot ${tone}"></i>${esc(text)}</div>
+          <div class="card-title">${esc(ev.title)}</div>
+          <div class="meta">${esc([fmtDates(ev.date_start, ev.date_end), ev.city].filter(Boolean).join(', '))}</div>
+          ${tagsRow(ev, true)}
+          ${myIds.has(ev.id) ? '<div class="mine"><i class="dot you"></i>Вы заявлены</div>' : ''}
+        </button>`;
+    }
+    function wireCards(box) {
+      box.querySelectorAll('.card').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+    }
+
+    function renderHomeRail() {
+      const test = HOME_SEGS.find(s => s[0] === homeSeg)[2];
+      const list = allEvents.filter(test)
+        .sort((a, b) => String(a.date_start).localeCompare(String(b.date_start)));
+      const box = $('home-events');
+      if (!list.length) {
+        box.innerHTML = `<div class="note tight">${
+          {open:'Сейчас заявки никуда не собирают.', live:'Сейчас ничего не идёт.',
+           anons:'Новых анонсов пока нет.'}[homeSeg]}</div>`;
+        return;
+      }
+      box.innerHTML = `<div class="rail" aria-label="Соревнования">${list.map(cardHTML).join('')}</div>`;
+      wireCards(box);
+    }
+
+    function renderPastRail() {
+      const list = allEvents.filter(isPast)
+        .sort((a, b) => String(b.date_start).localeCompare(String(a.date_start)));
+      const box = $('home-past');
+      if (!list.length) { box.innerHTML = '<div class="note tight">Прошедших стартов пока нет.</div>'; return; }
+      box.innerHTML = `<div class="rail" aria-label="Прошедшие соревнования">${list.map(cardHTML).join('')}</div>`;
+      wireCards(box);
+    }
+
+    // ── Поиск ──
+    const SEGMENTS = [
+      ['live',     'Идут',        isLive,                       'asc'],
+      ['upcoming', 'Скоро',       ev => isOpen(ev) || isAnnounced(ev), 'asc'],
+      ['past',     'Завершённые', isPast,                       'desc'],
+    ];
+    let seg = 'upcoming';
+    let filters = {city: '', price: ''};
+
+    async function loadSearch() {
       const box = $('events-list');
-      box.innerHTML = '<div class="empty">Загрузка…</div>';
-      const list = await api('/api/events');
-      if (!Array.isArray(list) || !list.length) {
-        box.innerHTML = '<div class="empty"><b>Пока нет соревнований</b>Здесь появятся ближайшие старты</div>';
+      if (!allEvents) box.innerHTML = skeleton(2);
+      await ensureEvents();
+      renderSegs();
+      renderFeed();
+    }
+
+    function renderSegs() {
+      $('segs').innerHTML = SEGMENTS.map(([key, label, test]) => {
+        const n = allEvents.filter(test).length;
+        return `<button class="seg" role="tab" data-seg="${key}" aria-selected="${key === seg}">
+          ${label}${n ? `<b class="num">${n}</b>` : ''}</button>`;
+      }).join('');
+      $('segs').querySelectorAll('.seg').forEach(b => b.onclick = () => {
+        seg = b.dataset.seg; renderSegs(); renderFeed();
+      });
+    }
+
+    function matches(ev) {
+      const q = $('q').value.trim().toLowerCase();
+      if (q && !`${ev.title} ${ev.city} ${ev.venue}`.toLowerCase().includes(q)) return false;
+      if (filters.city && ev.city !== filters.city) return false;
+      if (filters.price === 'free' && ev.price_min) return false;
+      if (filters.price === '3000' && !(ev.price_min <= 3000)) return false;
+      if (filters.price === '5000' && !(ev.price_min <= 5000)) return false;
+      return true;
+    }
+
+    function renderFeed() {
+      const [, , test, order] = SEGMENTS.find(s => s[0] === seg);
+      const list = allEvents.filter(test).filter(matches).sort((a, b) =>
+        (order === 'asc' ? 1 : -1) * String(a.date_start).localeCompare(String(b.date_start)));
+      const box = $('events-list');
+      const active = filters.city || filters.price || $('q').value.trim();
+      $('filter-btn').classList.toggle('on', !!(filters.city || filters.price));
+      if (!list.length) {
+        box.innerHTML = `<div class="note">${active
+          ? 'Ничего не нашлось.<br>Измените запрос или снимите фильтры.'
+          : {live:'Сейчас ничего не идёт.', upcoming:'Ближайших стартов пока нет.',
+             past:'Прошедших стартов пока нет.'}[seg]}</div>`;
         return;
       }
       box.innerHTML = list.map(ev => {
-        const [cls, label] = STATUS[ev.status] || ['done', ev.status];
-        const place = [ev.city, ev.venue].filter(Boolean).join(' · ');
+        const [tone, text] = stateLine(ev);
+        const place = [fmtDates(ev.date_start, ev.date_end), ev.city].filter(Boolean).join(', ');
         return `
-        <div class="ev-card" data-id="${ev.id}">
-          <div class="ev-cover">${ev.has_logo
-            ? `<img src="/api/event-logo/${ev.id}?v=${ev.logo_v}" alt="">`
-            : `<div class="ph">${esc((ev.title||'').slice(0,1).toUpperCase())}</div>`}</div>
-          <div class="ev-body">
-            <div class="ev-title">${esc(ev.title)}</div>
-            <div class="ev-meta">${esc(fmtDates(ev.date_start, ev.date_end))}${place ? ' · ' + esc(place) : ''}</div>
-            <div class="ev-foot">
-              <div>
-                <div class="ev-count">${ev.entries}<small>${plural(ev.entries,'участник','участника','участников')}</small></div>
-                ${ev.price_min !== null ? `<div class="ev-price">${esc(priceRange(ev.price_min, ev.price_max))}</div>` : ''}
-              </div>
-              <span class="badge ${cls}">${esc(label)}</span>
-            </div>
+        <button class="feed-item" data-id="${ev.id}">
+          <div class="art">${artHTML(ev)}</div>
+          <div class="feed-txt">
+            <div class="state"><i class="dot ${tone}"></i>${esc(text)}</div>
+            <div class="feed-title">${esc(ev.title)}</div>
+            <div class="meta">${esc(place)}</div>
+            ${tagsRow(ev)}
+            ${myIds.has(ev.id) ? '<div class="mine"><i class="dot you"></i>Вы заявлены</div>' : ''}
           </div>
-        </div>`;
+        </button>`;
       }).join('');
-      box.querySelectorAll('.ev-card').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+      box.querySelectorAll('.feed-item').forEach(c => c.onclick = () => openEvent(c.dataset.id));
     }
 
-    // ── Экран события ──
-    async function openEvent(id){
+    let qTimer = null;
+    $('q').addEventListener('input', () => {
+      clearTimeout(qTimer);
+      qTimer = setTimeout(renderFeed, 180);
+    });
+
+    $('filter-btn').onclick = () => {
+      const cities = [...new Set(allEvents.map(e => e.city).filter(Boolean))].sort();
+      const PRICES = [['', 'Любая'], ['free', 'Бесплатно'], ['3000', 'До 3 000 ₽'], ['5000', 'До 5 000 ₽']];
+      const optRow = (group, val, label, cur) => `
+        <button class="opt" role="radio" data-group="${group}" data-val="${esc(val)}"
+                aria-checked="${val === cur}">
+          <div class="opt-name">${esc(label)}</div><i class="tick"></i>
+        </button>`;
+      openSheet(`
+        <h3>Фильтры</h3>
+        <div class="h">Город</div>
+        <div role="radiogroup" aria-label="Город">
+          ${optRow('city', '', 'Любой', filters.city)}
+          ${cities.map(c => optRow('city', c, c, filters.city)).join('')}
+        </div>
+        <div class="h">Цена</div>
+        <div role="radiogroup" aria-label="Цена">
+          ${PRICES.map(([v, l]) => optRow('price', v, l, filters.price)).join('')}
+        </div>
+        <div class="sheet-foot">
+          <button class="btn" id="sh-apply">Показать</button>
+          <button class="btn text" id="sh-reset">Сбросить фильтры</button>
+        </div>`, $('filter-btn'));
+      const draft = {city: filters.city, price: filters.price};
+      $('sheet').querySelectorAll('.opt').forEach(b => b.onclick = () => {
+        const g = b.dataset.group;
+        $('sheet').querySelectorAll(`[data-group="${g}"]`)
+          .forEach(x => x.setAttribute('aria-checked', 'false'));
+        b.setAttribute('aria-checked', 'true');
+        draft[g] = b.dataset.val;
+      });
+      $('sh-apply').onclick = () => { filters = draft; closeSheet(); renderFeed(); };
+      $('sh-reset').onclick = () => { filters = {city:'', price:''}; closeSheet(); renderFeed(); };
+    };
+
+    // ── Событие ──
+    async function openEvent(id) {
       show('event');
       const box = $('event-body');
-      box.innerHTML = '<div class="empty">Загрузка…</div>';
+      box.innerHTML = skeleton(1);
       const ev = await api('/api/events/' + id);
-      if (ev.error) { box.innerHTML = '<div class="empty">Не удалось загрузить событие</div>'; return; }
-      const [cls, label] = STATUS[ev.status] || ['done', ev.status];
-      const place = [ev.city, ev.venue].filter(Boolean).join(' · ');
-      const divs = (ev.divisions||[]).map(d => {
-        const kind = d.team_size > 1 ? `команда · ${d.team_size} чел.` : 'личный зачёт';
-        const limit = d.max_entries ? ` · лимит ${d.max_entries}` : '';
-        return `
-        <div class="div-card">
-          <div>
-            <div class="div-name">${esc(d.name)}</div>
-            <div class="div-meta">${esc(kind)}${esc(limit)}</div>
-            <div class="div-price">${esc(money(d.price))}${d.team_size > 1 && d.price ? ' <span>за команду</span>' : ''}</div>
-          </div>
-          <div class="div-count">${d.entries}</div>
-        </div>`;
-      }).join('') || '<div class="empty">Дивизионы пока не заданы</div>';
+      if (ev.error) {
+        box.innerHTML = '<div class="note">Событие не открылось.<br>Вернитесь назад и попробуйте ещё раз.</div>';
+        return;
+      }
+      evTab = 'overview';
+      lbOpen.clear();
+      renderEvent(ev);
+    }
 
-      // строки с датами: регистрация и онлайн-отбор показываем, только если заданы
-      const rows = [
+    // Вкладки внутри события. Пустые не показываем: вкладка, за которой
+    // ничего нет, обещает содержимое, которого организатор не публиковал.
+    const EV_TABS = [
+      ['overview', 'Обзор',      () => true],
+      ['protocol', 'Протокол',   ev => ev.has.results > 0],
+      ['wods',     'Комплексы',  ev => ev.has.wods > 0],
+      ['schedule', 'Расписание', ev => ev.has.schedule > 0],
+      ['heats',    'Заходы',     ev => ev.has.heats > 0],
+    ];
+    let evCur = null, evTab = 'overview', lbDiv = null, lbOpen = new Set();
+
+    function renderEvent(ev) {
+      evCur = ev;
+      renderBar('event', ev.title);
+      const tabs = EV_TABS.filter(([, , test]) => test(ev));
+      const segs = $('ev-segs');
+      // одна вкладка — это не выбор, полосу не показываем
+      segs.hidden = tabs.length < 2;
+      if (!tabs.some(t => t[0] === evTab)) evTab = 'overview';
+      segs.innerHTML = tabs.map(([key, label]) =>
+        `<button class="seg" role="tab" data-tab="${key}" aria-selected="${key === evTab}">${label}</button>`).join('');
+      segs.querySelectorAll('.seg').forEach(b => b.onclick = () => {
+        evTab = b.dataset.tab;
+        renderEvent(evCur);
+        window.scrollTo(0, 0);
+      });
+      $('lb-pinned').hidden = true;
+      if (evTab === 'overview') renderOverview(ev);
+      if (evTab === 'protocol') loadProtocol(ev);
+      if (evTab === 'wods')     loadWods(ev);
+      if (evTab === 'schedule') loadSchedule(ev);
+      if (evTab === 'heats')    loadHeats(ev);
+    }
+
+    function renderOverview(ev) {
+      const box = $('event-body');
+
+      const hero = heroFact(ev);
+      const place = [ev.city, ev.venue].filter(Boolean).join(', ');
+      const kindOf = d => d.team_size > 1 ? `Команда, ${d.team_size} чел.` : 'Личный зачёт';
+
+      const divs = (ev.divisions || []).map(d => `
+        <div class="row">
+          <div>
+            <div class="row-main">${esc(d.name)}</div>
+            <div class="row-sub">${esc(kindOf(d))}, ${esc(money(d.price))}${
+              d.team_size > 1 && d.price ? ' за команду' : ''}</div>
+          </div>
+          <div class="row-val num">${d.entries}${d.max_entries ? ` <span class="row-val q">/ ${d.max_entries}</span>` : ''}</div>
+        </div>`).join('') || '<div class="note">Дивизионы пока не объявлены.</div>';
+
+      // Регистрация уехала в главный факт — здесь её уже не повторяем
+      const dates = [
         ['Соревнование', fmtDates(ev.date_start, ev.date_end)],
-        ['Регистрация', fmtDates(ev.reg_opens_at, ev.reg_closes_at)],
         ['Онлайн-отбор', fmtDates(ev.qual_start, ev.qual_end)],
       ].filter(([, v]) => v).map(([k, v]) =>
-        `<div class="dt-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+        `<div class="row"><div class="row-main">${esc(k)}</div><div class="row-val num">${esc(v)}</div></div>`).join('');
 
-      const socials = [
-        ev.telegram  ? `<a class="soc" href="${esc(ev.telegram)}" target="_blank" rel="noopener">Telegram</a>` : '',
-        ev.instagram ? `<a class="soc" href="${esc(ev.instagram)}" target="_blank" rel="noopener">Instagram</a>` : '',
+      const links = [
+        ev.telegram  ? `<a href="${esc(ev.telegram)}" target="_blank" rel="noopener">Telegram</a>` : '',
+        ev.instagram ? `<a href="${esc(ev.instagram)}" target="_blank" rel="noopener">Instagram</a>` : '',
       ].filter(Boolean).join('');
 
       box.innerHTML = `
-        ${ev.has_logo ? `<div class="ev-banner"><img src="/api/event-logo/${ev.id}?v=${ev.logo_v}" alt=""></div>` : ''}
-        <div class="ev-hero">
-          <span class="badge ${cls}">${esc(label)}</span>
-          <h1 style="margin-top:10px">${esc(ev.title)}</h1>
-          <div class="sub">${place ? esc(place) : ''}</div>
-          ${ev.description ? `<div class="desc">${esc(ev.description)}</div>` : ''}
+        <div class="art">${artHTML(ev)}</div>
+        <div class="ev-head">
+          <div class="mark">${markHTML(ev)}</div>
+          <h1 class="ev-title">${esc(ev.title)}</h1>
+          ${place ? `<div class="ev-place">${esc(place)}</div>` : ''}
         </div>
 
-        <div class="stat-row">
-          <div class="stat"><b>${ev.athletes}</b><span>${plural(ev.athletes,'атлет','атлета','атлетов')}</span></div>
-          <div class="stat"><b>${ev.entries}</b><span>${plural(ev.entries,'заявка','заявки','заявок')}</span></div>
-          <div class="stat"><b>${(ev.divisions||[]).length}</b><span>${plural((ev.divisions||[]).length,'дивизион','дивизиона','дивизионов')}</span></div>
+        <div class="hero">
+          <div class="hero-label${hero.live ? ' live' : ''}">${
+            hero.live ? '<i class="dot live"></i>' : ''}${esc(hero.label)}</div>
+          <div class="hero-value${
+            hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
+          }">${esc(hero.value)}</div>
         </div>
 
-        ${rows ? `<div class="sec-title">Даты</div><div class="dt-box">${rows}</div>` : ''}
-        ${socials ? `<div class="sec-title">Соцсети</div><div class="soc-row">${socials}</div>` : ''}
+        <div style="padding-top:22px">${actionBlock(ev)}</div>
 
-        <div class="sec-title">Дивизионы</div>
-        ${divs}
-        ${ev.status === 'registration'
-          ? `<button class="btn" style="margin-top:14px" id="ev-register">Зарегистрироваться</button>`
-          : ''}`;
-      const btn = $('ev-register');
-      if (btn) btn.onclick = () => toast('Регистрация — следующий шаг');
+        ${ev.description ? `<div class="pad"><p class="ev-desc">${esc(ev.description)}</p></div>` : ''}
+
+        <div class="h">Дивизионы<span>заявок</span></div>
+        <div class="rows">${divs}</div>
+
+        ${dates ? `<div class="h">Даты</div><div class="rows">${dates}</div>` : ''}
+        ${links ? `<div class="h">Организатор</div><div class="pad links">${links}</div>` : ''}
+        <div style="height:32px"></div>`;
+
+      wireActions(ev);
+    }
+
+    // Модуль соревнования недоступен — это не «данных нет», а «нет связи»:
+    // во время старта разница принципиальная.
+    const FEED_DOWN = `<div class="note">Связи с системой соревнования нет.<br>
+      Данные появятся, как только она ответит.</div>`;
+
+    // ── Протокол ──
+    const RES_LABEL = {time:'Время', reps:'Повторы', weight:'Вес'};
+    const STATUS_LABEL = {dnf:'Не закончил', dns:'Не вышел', cap:'Не уложился'};
+    const STAGE_LABEL = {qualification:'Квалификация', semifinal:'Полуфинал', final:'Финал'};
+
+    // Время храним в секундах, вес в килограммах, повторы числом
+    function fmtValue(v, type, status) {
+      if (status && status !== 'ok') return STATUS_LABEL[status] || '—';
+      if (v === null || v === undefined) return '—';
+      if (type === 'time') {
+        const t = Math.round(v);
+        return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+      }
+      if (type === 'weight') return `${+v} кг`;
+      return String(+v);
+    }
+
+    async function loadProtocol(ev) {
+      const box = $('event-body');
+      const divs = ev.divisions || [];
+      if (!divs.length) { box.innerHTML = '<div class="note">Дивизионы не заданы.</div>'; return; }
+      if (!lbDiv || !divs.some(d => d.id === lbDiv)) {
+        // по умолчанию — свой дивизион: атлет открывает протокол ради своей строки
+        lbDiv = ev.my_entry ? ev.my_entry.division_id : divs[0].id;
+      }
+      box.innerHTML = `<div class="pick"><button id="lb-pick">
+          <span id="lb-pick-name">${esc((divs.find(d => d.id === lbDiv) || divs[0]).name)}</span>
+          <svg viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+        </button><div class="prog" id="lb-prog">Считаем…</div></div><div id="lb-body"></div>`;
+      $('lb-pick').onclick = () => pickDivisionFor(ev);
+      renderProtocol(ev);
+    }
+
+    function pickDivisionFor(ev) {
+      openSheet(`
+        <h3>Дивизион</h3>
+        <div role="radiogroup" aria-label="Дивизион">
+          ${(ev.divisions || []).map(d => `
+            <button class="opt" role="radio" data-id="${d.id}" aria-checked="${d.id === lbDiv}">
+              <div class="opt-name">${esc(d.name)}</div><i class="tick"></i>
+            </button>`).join('')}
+        </div>
+        <div class="sheet-foot"><button class="btn text" id="sh-close">Закрыть</button></div>`,
+        $('lb-pick'));
+      $('sh-close').onclick = closeSheet;
+      $('sheet').querySelectorAll('.opt').forEach(b => b.onclick = () => {
+        lbDiv = Number(b.dataset.id); lbOpen.clear(); closeSheet(); loadProtocol(ev);
+      });
+    }
+
+    async function renderProtocol(ev) {
+      const body = $('lb-body');
+      body.innerHTML = skeleton(1);
+      const d = await api(`/api/events/${ev.id}/leaderboard?division=${lbDiv}`);
+      if (d.error === 'feed_unavailable') {
+        // рядом с ошибкой не должно висеть «Считаем…»
+        $('lb-prog').textContent = '';
+        body.innerHTML = FEED_DOWN;
+        return;
+      }
+      if (d.error) {
+        $('lb-prog').textContent = '';
+        body.innerHTML = '<div class="note">Протокол не загрузился.</div>';
+        return;
+      }
+      $('lb-prog').textContent = d.wods_total
+        ? `${d.wods_done} из ${d.wods_total} ${plural(d.wods_total,'комплекса','комплексов','комплексов')}`
+        : '';
+      if (!d.rows.length) {
+        body.innerHTML = '<div class="note">В этом дивизионе пока нет заявок.</div>';
+        return;
+      }
+      body.innerHTML = d.rows.map(r => {
+        const isMine = !!r.is_me;
+        const open = lbOpen.has(String(r.entry_id ?? r.name));
+        const detail = r.wods.map(w => `
+          <div class="pw">
+            <div class="pw-name">${esc(w.name)}</div>
+            <div class="pw-res"><b>${esc(fmtValue(w.value, w.result_type, w.status))}</b>${
+              w.place ? ` · ${w.place} место · ${w.points}` : ' · —'}</div>
+          </div>`).join('') || '<div class="pw pw-name">Комплексов ещё нет</div>';
+        return `
+        <div class="lb-item${open ? ' open' : ''}" data-id="${r.entry_id ?? r.name}">
+          <button class="lb-row${isMine ? ' is-me' : ''}">
+            <div class="lb-place">${r.place}</div>
+            <div class="lb-ava">${r.avatar
+              ? `<img src="${esc(r.avatar)}" alt="" loading="lazy">` : esc(initials(r.name))}</div>
+            <div>
+              <div class="lb-name">${esc(r.name)}</div>
+              ${r.members.length > 1 ? `<div class="lb-sub">${esc(r.members.join(', '))}</div>` : ''}
+            </div>
+            <div class="lb-pts">${r.points}</div>
+            <div class="lb-chev">
+              <svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+            </div>
+          </button>
+          <div class="lb-detail">${detail}</div>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('.lb-item').forEach(item => {
+        item.querySelector('.lb-row').onclick = () => {
+          const id = item.dataset.id;
+          item.classList.toggle('open');
+          if (item.classList.contains('open')) lbOpen.add(id); else lbOpen.delete(id);
+        };
+      });
+      pinOwnRow(d.rows.find(r => r.is_me));
+    }
+
+    // В протоколе на 70 человек свою строку не ищут пальцем: когда она
+    // уходит из виду, прижимаем копию к низу экрана.
+    let lbObserver = null;
+    function pinOwnRow(row) {
+      const pin = $('lb-pinned');
+      lbObserver?.disconnect();
+      if (!row) { pin.hidden = true; return; }
+      pin.innerHTML = `
+        <div class="lb-place" style="color:var(--accent)">${row.place}</div>
+        <div class="lb-name">${esc(row.name)}</div>
+        <div class="lb-pts">${row.points}</div>`;
+      const el = $('lb-body').querySelector('.lb-row.is-me')?.closest('.lb-item');
+      if (!el) { pin.hidden = true; return; }
+      lbObserver = new IntersectionObserver(
+        ([e]) => { pin.hidden = e.isIntersecting; },
+        {rootMargin: `-${52}px 0px -${80}px 0px`});
+      lbObserver.observe(el);
+      pin.onclick = () => el.scrollIntoView({block:'center'});
+    }
+
+    // ── Комплексы ──
+    async function loadWods(ev) {
+      const box = $('event-body');
+      box.innerHTML = skeleton(1);
+      const list = await api(`/api/events/${ev.id}/wods`);
+      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
+      if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Комплексы не загрузились.</div>'; return; }
+      if (!list.length) { box.innerHTML = '<div class="note">Комплексы пока не объявлены.</div>'; return; }
+      box.innerHTML = list.map(w => {
+        const meta = [STAGE_LABEL[w.stage] || '', RES_LABEL[w.result_type] || '',
+                      w.time_cap ? `крышка ${w.time_cap}` : ''].filter(Boolean).join(', ');
+        const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все дивизионы';
+        return `
+        <div class="acc" data-id="${w.id}">
+          <button class="acc-head">
+            <div>
+              <div class="acc-name">${esc(w.name)}</div>
+              <div class="acc-meta">${esc(meta)}</div>
+            </div>
+            <div class="acc-chev">
+              <svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+            </div>
+          </button>
+          <div class="acc-body">
+            ${w.description ? `<div class="acc-desc">${esc(w.description)}</div>`
+                            : '<div class="acc-desc" style="color:var(--steel)">Описание не опубликовано.</div>'}
+            <div class="acc-score"><span>${esc(who)}</span><span>${
+              esc(w.scoring_note || RES_LABEL[w.result_type] || '')}</span></div>
+          </div>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('.acc').forEach(a =>
+        a.querySelector('.acc-head').onclick = () => a.classList.toggle('open'));
+    }
+
+    // ── Расписание ──
+    async function loadSchedule(ev) {
+      const box = $('event-body');
+      box.innerHTML = skeleton(1);
+      const list = await api(`/api/events/${ev.id}/schedule`);
+      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
+      if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Расписание не загрузилось.</div>'; return; }
+      if (!list.length) { box.innerHTML = '<div class="note">Расписание пока не опубликовано.</div>'; return; }
+      const days = [...new Set(list.map(s => s.day))];
+      box.innerHTML = days.map(day => `
+        ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
+        ${list.filter(s => s.day === day).map(s => `
+          <div class="sch-row">
+            <div class="sch-time">${esc(s.time)}</div>
+            <div>
+              <div class="sch-title">${esc(s.title)}</div>
+              <div class="row-sub">${esc([s.location, s.division].filter(Boolean).join(', '))}</div>
+            </div>
+          </div>`).join('')}`).join('');
+    }
+
+    // ── Заходы ──
+    async function loadHeats(ev) {
+      const box = $('event-body');
+      box.innerHTML = skeleton(1);
+      const list = await api(`/api/events/${ev.id}/heats`);
+      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
+      if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Заходы не загрузились.</div>'; return; }
+      if (!list.length) { box.innerHTML = '<div class="note">Заходы пока не опубликованы.</div>'; return; }
+      evHeats = list;
+      const days = [...new Set(list.map(h => h.day))];
+      box.innerHTML = days.map(day => `
+        ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
+        ${list.filter(h => h.day === day).map(h => {
+          const mine = h.entries.some(a => a.is_me);
+          return `
+          <button class="heat-row${mine ? ' is-me' : ''}" data-id="${h.id}">
+            <div>
+              <div class="heat-num">Заход ${h.number}${mine ? ' · ваш' : ''}</div>
+              <div class="row-sub">${esc([h.wod, h.location].filter(Boolean).join(', '))}</div>
+            </div>
+            <div class="heat-time">${esc(h.start_time)}</div>
+          </button>`;
+        }).join('')}`).join('');
+      box.querySelectorAll('.heat-row').forEach(b => b.onclick = () => openHeat(ev, b.dataset.id));
+    }
+
+    let evHeats = [];
+    function openHeat(ev, id) {
+      const h = evHeats.find(x => String(x.id) === String(id));
+      if (!h) return;
+      const box = $('event-body');
+      $('ev-segs').hidden = true;
+      box.innerHTML = `
+        <div class="pick"><button id="heat-back">
+          <svg viewBox="0 0 12 8" style="width:14px;height:10px;transform:rotate(90deg)"
+               fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+               stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+          Заход ${h.number}
+        </button><div class="prog">${esc([h.wod, h.location].filter(Boolean).join(', '))}</div></div>
+
+        ${h.briefing_start ? `
+        <div class="phase">
+          <div class="phase-label">Брифинг</div>
+          <div class="phase-line">
+            <div class="phase-time">${esc(h.briefing_start)}</div>
+            <div class="phase-bar"></div>
+            <div class="phase-time">${esc(h.briefing_end)}</div>
+          </div>
+        </div>` : ''}
+
+        <div class="hs">
+          <div class="hs-label">Заход начинается в</div>
+          <div class="hs-time">${esc(h.start_time || '—')}</div>
+        </div>
+
+        <div class="h">Старт-лист<span>дорожка</span></div>
+        ${h.entries.map(a => `
+          <div class="lane-row${a.is_me ? ' is-me' : ''}">
+            <div class="lane-num">${a.lane}</div>
+            <div class="lb-ava">${a.avatar
+              ? `<img src="${esc(a.avatar)}" alt="" loading="lazy">` : esc(initials(a.name))}</div>
+            <div>
+              <div class="lb-name">${esc(a.name)}</div>
+              <div class="lb-sub">${esc(a.division)}</div>
+            </div>
+          </div>`).join('') || '<div class="note">Состав не задан.</div>'}
+        <div style="height:32px"></div>`;
+      $('heat-back').onclick = () => { renderEvent(ev); };
+      window.scrollTo(0, 0);
+    }
+
+    // Блок действия на экране события: одно состояние — один блок.
+    function actionBlock(ev) {
+      if (ev.my_entry) return `
+        <div class="entry">
+          <div class="entry-top"><i class="dot you"></i>Вы заявлены</div>
+          <div class="entry-div">${esc(ev.my_entry.division)}</div>
+          ${ev.status === 'registration'
+            ? '<div class="entry-act"><button id="ev-withdraw">Снять заявку</button></div>'
+            : ''}
+        </div>`;
+      if (ev.status !== 'registration') return '';
+      if (isAnnounced(ev)) return `
+        <div class="notice">
+          <b>Регистрация ещё не открыта</b>
+          Приём заявок начнётся ${esc(fmtDay(ev.reg_opens_at))}.
+        </div>`;
+      if (!ev.profile_complete) return `
+        <div class="notice">
+          <b>Профиль не заполнен</b>
+          Имя и пол нужны организатору, чтобы включить вас в протокол.
+          <button class="btn" id="ev-to-profile">Заполнить профиль</button>
+        </div>`;
+      return `<div class="pad"><button class="btn" id="ev-register">Подать заявку</button></div>`;
+    }
+
+    function wireActions(ev) {
+      const reg = $('ev-register'), wd = $('ev-withdraw'), pr = $('ev-to-profile');
+      if (reg) reg.onclick = () => pickDivision(ev, reg);
+      if (wd)  wd.onclick  = () => confirmWithdraw(ev, wd);
+      if (pr)  pr.onclick  = () => show('profile');
+    }
+
+    // Почему в дивизион нельзя — говорим до нажатия, а не после
+    function blockedReason(ev, d) {
+      if (d.team_size > 1) return 'Командный';
+      if (d.gender_rule === 'male'   && me?.user?.gender !== 'М') return 'Только мужчины';
+      if (d.gender_rule === 'female' && me?.user?.gender !== 'Ж') return 'Только женщины';
+      if (d.max_entries && d.entries >= d.max_entries) return 'Мест нет';
+      return '';
+    }
+
+    function pickDivision(ev, trigger) {
+      let chosen = null;
+      const rows = (ev.divisions || []).map(d => {
+        const why = blockedReason(ev, d);
+        const sub = (d.team_size > 1 ? `Команда, ${d.team_size} чел.` : 'Личный зачёт')
+          + `, ${money(d.price)}${d.team_size > 1 && d.price ? ' за команду' : ''}`;
+        return `
+        <button class="opt" role="radio" aria-checked="false" data-id="${d.id}"
+                data-price="${d.price}" ${why ? 'disabled' : ''}>
+          <div>
+            <div class="opt-name">${esc(d.name)}</div>
+            <div class="opt-sub">${esc(sub)}</div>
+          </div>
+          ${why ? `<div class="opt-why">${esc(why)}</div>` : '<i class="tick"></i>'}
+        </button>`;
+      }).join('');
+
+      openSheet(`
+        <h3>Выбор дивизиона</h3>
+        <p>${esc(ev.title)}</p>
+        <div role="radiogroup" aria-label="Дивизион">${rows}</div>
+        <div class="sheet-foot">
+          <button class="btn" id="sh-go" disabled>Выберите дивизион</button>
+          <button class="btn text" id="sh-cancel">Отмена</button>
+        </div>`, trigger);
+
+      const go = $('sh-go');
+      $('sh-cancel').onclick = closeSheet;
+      $('sheet').querySelectorAll('.opt:not([disabled])').forEach(b => b.onclick = () => {
+        $('sheet').querySelectorAll('.opt').forEach(x => x.setAttribute('aria-checked', 'false'));
+        b.setAttribute('aria-checked', 'true');
+        chosen = b.dataset.id;
+        // кнопка называет цену: человек видит, за что платит, до нажатия
+        const price = Number(b.dataset.price);
+        go.textContent = price ? `Подать заявку · ${money(price)}` : 'Подать заявку';
+        go.disabled = false;
+      });
+
+      go.onclick = async () => {
+        if (!chosen) return;
+        go.disabled = true; go.textContent = 'Отправляем…';
+        const res = await send(`/api/events/${ev.id}/entry`, 'POST', {division_id: Number(chosen)});
+        if (res.error) {
+          go.disabled = false; go.textContent = 'Подать заявку';
+          $('sheet').querySelector('p').innerHTML = `<span class="err">${esc(reason(res.error))}</span>`;
+          return;
+        }
+        closeSheet();
+        toast('Заявка подана');
+        await refreshMe();
+        reloadEvent(ev.id);
+      };
+    }
+
+    function confirmWithdraw(ev, trigger) {
+      openSheet(`
+        <h3>Снять заявку?</h3>
+        <p>${esc(ev.title)}, ${esc(ev.my_entry.division)}. Место освободится для других,
+           подать заявку снова можно, пока идёт регистрация.</p>
+        <div class="sheet-foot">
+          <button class="btn text" id="sh-yes">Снять заявку</button>
+          <button class="btn" id="sh-no">Оставить</button>
+        </div>`, trigger);
+      $('sh-no').onclick = closeSheet;
+      $('sh-yes').onclick = async () => {
+        const b = $('sh-yes');
+        b.disabled = true; b.textContent = 'Снимаем…';
+        const res = await send(`/api/events/${ev.id}/entry`, 'DELETE');
+        if (res.error) {
+          b.disabled = false; b.textContent = 'Снять заявку';
+          $('sheet').querySelector('p').innerHTML = `<span class="err">${esc(reason(res.error))}</span>`;
+          return;
+        }
+        closeSheet();
+        toast('Заявка снята');
+        await refreshMe();
+        reloadEvent(ev.id);
+      };
+    }
+
+    // Перерисовка события на месте: после заявки экран не должен прыгать наверх
+    async function reloadEvent(id) {
+      const y = window.scrollY;
+      const ev = await api('/api/events/' + id);
+      if (ev.error) return;
+      renderEvent(ev);
+      window.scrollTo(0, y);
+      // отметка «вы заявлены» живёт ещё и в ленте, и на главной
+      allEvents = null;
     }
 
     // ── Мои соревнования ──
-    async function loadMy(){
+    async function loadMy() {
       const box = $('my-list');
-      box.innerHTML = '<div class="empty">Загрузка…</div>';
-      const me = await api('/api/me');
-      if (me.error) { box.innerHTML = '<div class="empty">Нужно открыть приложение через Telegram</div>'; return; }
-      const list = me.my_events || [];
-      if (!list.length) {
-        box.innerHTML = '<div class="empty"><b>Вы пока никуда не заявлены</b>Выберите соревнование во вкладке «События»</div>';
+      box.innerHTML = skeleton(1);
+      if (!me) await refreshMe();
+      if (me.error) {
+        box.innerHTML = '<div class="note">Откройте приложение через Telegram, чтобы увидеть свои заявки.</div>';
         return;
       }
-      box.innerHTML = list.map(e => `
-        <div class="ev-card" data-id="${e.id}">
-          <div class="ev-body">
-            <div class="ev-title">${esc(e.title)}</div>
-            <div class="ev-meta">${esc(fmtDates(e.date_start))} · ${esc(e.division)}</div>
+      const list = me.my_events || [];
+      if (!list.length) {
+        box.innerHTML = '<div class="note">Вы пока никуда не заявлены.<br>Выберите старт на главной или в поиске.</div>';
+        return;
+      }
+      box.innerHTML = list.map(e => {
+        const [tone, text] = stateLine(e);
+        return `
+        <button class="my-row" data-id="${e.id}">
+          <div class="mark sm">${markHTML(e)}</div>
+          <div>
+            <div class="my-title">${esc(e.title)}</div>
+            <div class="row-sub">${esc(fmtDates(e.date_start, e.date_end))}, ${esc(e.division)}</div>
+            <div class="state" style="margin-top:5px"><i class="dot ${tone}"></i>${esc(text)}</div>
           </div>
-        </div>`).join('');
-      box.querySelectorAll('.ev-card').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+        </button>`;
+      }).join('');
+      box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+    }
+
+    // ── Новости ──
+    async function loadNews() {
+      const box = $('news-list');
+      if (!allNews) box.innerHTML = skeleton(1);
+      const list = await api('/api/news');
+      if (!Array.isArray(list)) {
+        box.innerHTML = '<div class="note">Новости не загрузились.<br>Проверьте связь и откройте вкладку заново.</div>';
+        return;
+      }
+      if (!list.length) {
+        box.innerHTML = '<div class="note">Новостей пока нет.</div>';
+        return;
+      }
+      box.innerHTML = list.map(n => `
+        <button class="news-row" data-id="${n.id}">
+          <div class="news-thumb">${n.has_image
+            ? `<img src="/api/news-image/${n.id}?v=${n.image_v}" alt="" loading="lazy">`
+            : `<div class="stub" aria-hidden="true">${esc(n.title.slice(0,1))}</div>`}</div>
+          <div>
+            <div class="news-title">${esc(n.title)}</div>
+            ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ''}
+            <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
+          </div>
+        </button>`).join('');
+      box.querySelectorAll('.news-row').forEach(c => c.onclick = () => openArticle(c.dataset.id));
+    }
+
+    async function openArticle(id) {
+      show('article');
+      const box = $('article-body');
+      box.innerHTML = skeleton(1);
+      const n = await api('/api/news/' + id);
+      if (n.error) {
+        box.innerHTML = '<div class="note">Новость не открылась.</div>';
+        return;
+      }
+      renderBar('article', n.title);
+      box.innerHTML = `
+        <div class="article">
+          ${n.has_image ? `<div class="art"><img src="/api/news-image/${n.id}?v=${n.image_v}" alt=""></div>` : ''}
+          <h1>${esc(n.title)}</h1>
+          <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
+          ${n.summary ? `<p class="lead">${esc(n.summary)}</p>` : ''}
+          ${n.body ? `<p>${esc(n.body)}</p>` : ''}
+          ${n.source_url ? `<div class="pad links" style="padding-top:24px">
+            <a href="${esc(n.source_url)}" target="_blank" rel="noopener">Источник</a></div>` : ''}
+          <div style="height:32px"></div>
+        </div>`;
     }
 
     // ── Профиль ──
-    async function loadProfile(){
+    async function loadProfile() {
       const box = $('profile-body');
-      box.innerHTML = '<div class="empty">Загрузка…</div>';
-      const me = await api('/api/me');
-      if (me.error) { box.innerHTML = '<div class="empty">Нужно открыть приложение через Telegram</div>'; return; }
+      box.innerHTML = skeleton(1);
+      if (!me) await refreshMe();
+      if (me.error) {
+        box.innerHTML = '<div class="note">Откройте приложение через Telegram, чтобы заполнить профиль.</div>';
+        return;
+      }
+      if (!clubs) {
+        const list = await api('/api/clubs');
+        clubs = Array.isArray(list) ? list : [];
+      }
       const u = me.user;
-      setTopAvatar(u);
       box.innerHTML = `
-        <div class="prof-head">
-          <div class="prof-ava">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u.name))}</div>
+        <div class="prof">
+          <button class="prof-ava" id="p-photo" aria-label="Сменить фото">
+            ${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u.name))}
+            <span class="cam">Фото</span>
+          </button>
           <div>
             <div class="prof-name">${esc(u.name || 'Без имени')}</div>
-            <div class="prof-sub">${esc([u.city, u.gym].filter(Boolean).join(' · ') || 'Заполните профиль')}</div>
+            <div class="prof-sub">${esc(u.club || 'Независимый атлет')}</div>
           </div>
         </div>
-        ${!me.profile_complete ? `<div class="empty" style="padding:0 0 14px"><b>Профиль не заполнен</b>Имя и пол нужны для участия в соревнованиях</div>` : ''}
-        <div class="field"><label>Имя и фамилия</label><input id="p-name" value="${esc(u.name)}" placeholder="Иван Петров" /></div>
-        <div class="field"><label>Пол</label><select id="p-gender">
-          <option value="">не указан</option>
-          <option value="М"${u.gender==='М'?' selected':''}>Мужской</option>
-          <option value="Ж"${u.gender==='Ж'?' selected':''}>Женский</option>
-        </select></div>
-        <div class="field"><label>Город</label><input id="p-city" value="${esc(u.city)}" placeholder="Севастополь" /></div>
-        <div class="field"><label>Зал</label><input id="p-gym" value="${esc(u.gym)}" placeholder="CrossFit Chersonesos" /></div>
-        <button class="btn" id="p-save">Сохранить</button>`;
-      $('p-save').onclick = () => toast('Сохранение профиля — следующий шаг');
+        ${!me.profile_complete
+          ? `<p class="pad" style="color:var(--steel);font-size:14px;padding-top:16px">
+               Имя и пол нужны, чтобы подать заявку.</p>` : ''}
+        <div style="height:26px"></div>
+        <div class="field"><label for="p-name">Имя и фамилия</label>
+          <input id="p-name" value="${esc(u.name)}" placeholder="Иван Петров" /></div>
+        <div class="field"><label for="p-gender">Пол</label>
+          <select id="p-gender">
+            <option value="">Не указан</option>
+            <option value="М"${u.gender==='М'?' selected':''}>Мужской</option>
+            <option value="Ж"${u.gender==='Ж'?' selected':''}>Женский</option>
+          </select></div>
+        <div class="pair-wrap"><div class="pair">
+          <div class="field"><label for="p-height">Рост, см</label>
+            <input id="p-height" type="text" inputmode="numeric" value="${u.height_cm ?? ''}" placeholder="178" /></div>
+          <div class="field"><label for="p-weight">Вес, кг</label>
+            <input id="p-weight" type="text" inputmode="decimal" value="${u.weight_kg ?? ''}" placeholder="82" /></div>
+        </div></div>
+        <div class="field"><label for="p-club">Клуб</label>
+          <select id="p-club">
+            <option value="">Независимый атлет</option>
+            ${clubs.map(c => `<option value="${c.id}"${u.club_id === c.id ? ' selected' : ''}>${
+              esc(c.name)}${c.city ? ` — ${esc(c.city)}` : ''}</option>`).join('')}
+          </select></div>
+        <div class="field"><label for="p-city">Город</label>
+          <input id="p-city" value="${esc(u.city)}" placeholder="Севастополь" /></div>
+        <div class="pad" style="padding-top:8px"><button class="btn" id="p-save">Сохранить</button></div>
+        <div id="p-err"></div>
+        <div style="height:32px"></div>`;
+      $('p-save').onclick = saveProfile;
+      $('p-photo').onclick = () => $('photo-input').click();
     }
 
-    function setTopAvatar(u){
-      $('top-ava').innerHTML = u?.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u?.name));
+    // Уменьшаем на клиенте: с телефона прилетает 4–12 МБ, а нужно 512px
+    $('photo-input').addEventListener('change', async e => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!/^image\/(jpeg|png|webp|heic|heif)$/.test(file.type) && !file.type.startsWith('image/')) {
+        toast('Подойдёт JPEG или PNG'); return;
+      }
+      toast('Загружаем фото…');
+      try {
+        const bmp = await createImageBitmap(file);
+        const side = Math.min(bmp.width, bmp.height), S = 512;
+        const cv = Object.assign(document.createElement('canvas'), {width:S, height:S});
+        cv.getContext('2d').drawImage(
+          bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, S, S);
+        const res = await send('/api/me/photo', 'POST', {data: cv.toDataURL('image/jpeg', .85)});
+        if (res.error) { toast(reason(res.error)); return; }
+        me.user.avatar = res.avatar;
+        loadProfile();
+        toast('Фото обновлено');
+      } catch (err) {
+        toast('Не удалось прочитать файл');
+      }
+    });
+
+    async function saveProfile() {
+      const btn = $('p-save');
+      const fields = {name:$('p-name'), gender:$('p-gender'), height_cm:$('p-height'),
+                      weight_kg:$('p-weight'), club_id:$('p-club'), city:$('p-city')};
+      Object.values(fields).forEach(f => f.classList.remove('bad'));
+      // сообщения прошлой попытки убираем целиком, иначе они переживают успешное
+      // сохранение и человек видит ошибку там, где всё уже в порядке
+      $('screen-profile').querySelectorAll('.err').forEach(e => e.remove());
+      $('p-err').innerHTML = '';
+
+      btn.disabled = true; btn.textContent = 'Сохраняем…';
+      const res = await send('/api/me', 'PATCH', {
+        name: fields.name.value, gender: fields.gender.value, city: fields.city.value,
+        gym: me.user.gym || '',
+        height_cm: fields.height_cm.value, weight_kg: fields.weight_kg.value,
+        club_id: fields.club_id.value,
+      });
+      btn.disabled = false; btn.textContent = 'Сохранить';
+
+      if (res.error) {
+        // ошибку показываем у поля, к которому она относится
+        const bad = res.fields || {};
+        Object.entries(bad).forEach(([k, msg]) => {
+          const f = fields[k];
+          if (!f) return;
+          f.classList.add('bad');
+          f.insertAdjacentHTML('afterend', `<div class="err">${esc(msg)}</div>`);
+        });
+        if (!Object.keys(bad).length)
+          $('p-err').innerHTML = `<div class="pad err">${esc(reason(res.error))}</div>`;
+        return;
+      }
+      me.user = res.user;
+      me.profile_complete = res.profile_complete;
+      fields.name.value = res.user.name;
+      fields.city.value = res.user.city;
+      document.querySelector('.prof-name').textContent = res.user.name || 'Без имени';
+      document.querySelector('.prof-sub').textContent = res.user.club || 'Независимый атлет';
+      renderBar('profile');
+      toast('Профиль сохранён');
     }
 
     // ── Старт ──
-    // Нужный экран можно открыть сразу: ?screen=events|my|profile или ?event=<id>.
-    // Удобно для отладки и для съёмки макетов.
+    // Нужный экран можно открыть сразу: ?screen=home|search|my|news|profile,
+    // ?event=<id> или ?news=<id>. Удобно для отладки и для съёмки макетов.
     (async () => {
-      const me = await api('/api/me');
-      if (me.user) setTopAvatar(me.user);
+      await refreshMe();
       const q = new URLSearchParams(location.search);
-      const eventId = q.get('event');
-      const screen = q.get('screen');
-      if (eventId) openEvent(eventId);
-      else show(SCREENS.includes(screen) ? screen : 'events');
+      const eventId = q.get('event'), newsId = q.get('news'), screen = q.get('screen');
+      if (eventId)      { renderBar('event',''); openEvent(eventId); }
+      else if (newsId)  { renderBar('article',''); openArticle(newsId); }
+      else show(SCREENS.includes(screen) ? screen : 'home');
     })();
   </script>
 </body>
