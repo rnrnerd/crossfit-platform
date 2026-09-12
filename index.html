@@ -170,8 +170,14 @@
     .news-thumb { flex:none; width:96px; aspect-ratio:4/3; border-radius:10px;
       overflow:hidden; background:var(--plate); display:grid; place-items:center; }
     .news-thumb img { width:100%; height:100%; object-fit:cover; }
-    .news-title { font-size:16px; font-weight:700; line-height:1.28; letter-spacing:-.02em; }
-    .news-sum { font-size:13px; color:var(--steel); margin-top:5px; }
+    .news-row > :last-child { min-width:0; }
+    /* Превью обрезается по строкам, а не по символам: пост из канала бывает
+       и в три слова, и в три абзаца — без потолка лента идёт рваной лесенкой.
+       Два и два — строка выходит ровно вровень с картинкой 96px. */
+    .news-title { font-size:16px; font-weight:700; line-height:1.28; letter-spacing:-.02em;
+      display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+    .news-sum { font-size:13px; line-height:1.38; color:var(--steel); margin-top:5px;
+      display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
     .news-date { font-size:12px; color:var(--steel); margin-top:6px; }
     .article h1 { font-size:26px; font-weight:700; line-height:1.18; letter-spacing:-.025em;
       padding:18px var(--pad) 0; }
@@ -1679,12 +1685,15 @@
         return;
       }
       renderBar('article', n.title);
+      // у поста из канала summary — это начало body, лид его бы просто повторил
+      const lead = n.summary && !(n.body || '').includes(n.summary.slice(0, 60))
+        ? n.summary : '';
       box.innerHTML = `
         <div class="article">
           ${n.has_image ? `<div class="art"><img src="/api/news-image/${n.id}?v=${n.image_v}" alt=""></div>` : ''}
           <h1>${esc(n.title)}</h1>
           <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
-          ${n.summary ? `<p class="lead">${esc(n.summary)}</p>` : ''}
+          ${lead ? `<p class="lead">${esc(lead)}</p>` : ''}
           ${n.body ? `<p>${esc(n.body)}</p>` : ''}
           ${(partner && !partner.error && n.partner_id === partner.id)
             ? partnerCard(partner, 'article', `Читать в ${partner.name}`,
