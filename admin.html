@@ -129,6 +129,7 @@
       <button data-page="events" aria-current="page">События</button>
       <button data-page="news">Новости</button>
       <button data-page="clubs">Клубы</button>
+      <button data-page="partners">Партнёры</button>
     </nav>
     <main class="main" id="main"></main>
   </div>
@@ -198,6 +199,7 @@
     if (name === 'events') listEvents();
     if (name === 'news')   listNews();
     if (name === 'clubs')  listClubs();
+    if (name === 'partners') listPartners();
   }
   document.querySelectorAll('.nav button').forEach(b => b.onclick = () => go(b.dataset.page));
 
@@ -636,6 +638,78 @@
       await send('/api/admin/clubs/' + row.id, 'PUT',
                  {name: row.name, city: row.city, is_active: !row.is_active});
       listClubs();
+    });
+  }
+
+  // ── Медиа-партнёры ──
+  const PLACES = {header:'Подпись в новостях', article:'Конец статьи', feed:'Конец ленты'};
+
+  async function listPartners() {
+    const m = $('main');
+    m.innerHTML = '<div class="note">Загрузка…</div>';
+    const list = await api('/api/admin/partners');
+    if (!Array.isArray(list)) { m.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    m.innerHTML = `
+      <div class="row-between">
+        <div><h2>Медиа-партнёры</h2>
+          <div class="sub">Раздел новостей. Активным может быть только один —
+            берётся первый включённый</div></div>
+        <button class="btn" id="new-pt">Добавить</button>
+      </div>
+      ${list.map(p => `
+        <div style="margin-top:22px">
+          <div class="grid" style="max-width:760px">
+            ${F('p-name-' + p.id, 'Название', p.name)}
+            ${F('p-tag-' + p.id, 'Подпись', p.tagline)}
+            ${F('p-url-' + p.id, 'Ссылка на канал', p.url, 'url')}
+            ${F('p-aud-' + p.id, 'Аудитория', p.audience)}
+            <div class="f"><label for="p-act-${p.id}">Показывать</label>
+              <select id="p-act-${p.id}">
+                <option value="1"${p.is_active ? ' selected' : ''}>Да</option>
+                <option value="0"${p.is_active ? '' : ' selected'}>Нет</option>
+              </select></div>
+          </div>
+          <div class="imgs">
+            <div class="img-slot mark">
+              <div class="label">Логотип 1:1 — кругом в подписи</div>
+              <div class="prev" id="pt-prev-${p.id}">${p.has_logo
+                ? `<img src="/api/partner-logo/${p.id}?t=${Date.now()}" alt="">` : 'нет'}</div>
+              <div class="bar"><button class="btn quiet" data-ptlogo="${p.id}">Загрузить</button></div>
+            </div>
+          </div>
+          <table style="max-width:520px">
+            <tr><th>Размещение</th><th class="num">Переходов</th></tr>
+            ${Object.entries(PLACES).map(([k, v]) => `
+              <tr><td>${v}</td><td class="num">${p.clicks[k] || 0}</td></tr>`).join('')}
+            <tr><td><b>Всего</b></td><td class="num"><b>${p.clicks_total}</b></td></tr>
+          </table>
+          <div class="bar"><button class="btn" data-ptsave="${p.id}">Сохранить</button></div>
+        </div>`).join('') || '<div class="note">Партнёров нет.</div>'}`;
+
+    $('new-pt').onclick = async () => {
+      const name = prompt('Название партнёра');
+      if (!name) return;
+      const res = await send('/api/admin/partners', 'POST', {name, is_active: true});
+      if (res.error) { toast('Не сохранилось'); return; }
+      listPartners();
+    };
+    m.querySelectorAll('[data-ptsave]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.ptsave;
+      const res = await send('/api/admin/partners/' + id, 'PUT', {
+        name: $('p-name-' + id).value, tagline: $('p-tag-' + id).value,
+        url: $('p-url-' + id).value, audience: $('p-aud-' + id).value,
+        is_active: $('p-act-' + id).value === '1'});
+      if (res.error) { toast(Object.values(res.fields || {})[0] || 'Не сохранилось'); return; }
+      toast('Сохранено');
+    });
+    m.querySelectorAll('[data-ptlogo]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.ptlogo;
+      const data = await pickImage(512, 512);
+      if (!data) return;
+      const res = await send(`/api/admin/partners/${id}/logo`, 'POST', {data});
+      if (res.error) { toast('Не загрузилось'); return; }
+      $('pt-prev-' + id).innerHTML = `<img src="/api/partner-logo/${id}?t=${Date.now()}" alt="">`;
+      toast('Логотип обновлён');
     });
   }
 

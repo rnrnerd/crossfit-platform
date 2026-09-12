@@ -420,6 +420,32 @@
     .lane-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
     .lane-num { font-size:15px; color:var(--steel); font-variant-numeric:tabular-nums; }
 
+    /* ── Медиа-партнёр раздела новостей ── */
+    /* Три размещения: тихая подпись сверху, кнопка в конце статьи и блок
+       в конце ленты. Слайдер на главной сюда намеренно не входит — это самый
+       дорогой инвентарь, его продают отдельно. */
+    .pt-line { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+      background:none; border:none; cursor:pointer; padding:11px var(--pad);
+      box-shadow:inset 0 -1px 0 var(--hair); min-height:44px; }
+    .pt-line:active, .pt-card:active { background:rgba(255,255,255,.05); }
+    /* Скруглённый квадрат, а не круг. Две причины: у медиа знак словесный —
+       круг срезает его по бокам и до 40px он нечитаем; и круг у нас означает
+       организатора или атлета, партнёра с ними путать не нужно. */
+    .pt-logo { flex:none; border-radius:7px; overflow:hidden; background:var(--plate);
+      display:grid; place-items:center; font-size:10px; font-weight:700; color:var(--steel); }
+    .pt-logo img { width:100%; height:100%; object-fit:cover; }
+    .pt-line .pt-logo { width:30px; height:30px; }
+    .pt-line span { flex:1; font-size:13px; color:var(--steel); }
+    .pt-line svg { flex:none; width:7px; height:11px; color:var(--steel); }
+
+    .pt-card { display:flex; align-items:center; gap:14px; width:100%; text-align:left;
+      margin:24px var(--pad) 8px; width:calc(100% - var(--pad) * 2);
+      background:var(--plate); border:none; border-radius:12px; padding:16px; cursor:pointer; }
+    .pt-card .pt-logo { width:48px; height:48px; border-radius:9px; }
+    .pt-name { font-size:16px; font-weight:700; letter-spacing:-.02em; }
+    .pt-sub { font-size:13px; color:var(--steel); margin-top:3px; }
+    .pt-go { flex:none; font-size:13px; font-weight:500; color:var(--accent); }
+
     .note { padding:56px var(--pad); text-align:center; color:var(--steel); font-size:15px; }
     .note.tight { padding:28px var(--pad); }
     .sk { background:var(--plate); border-radius:8px; }
@@ -1509,6 +1535,49 @@
       box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
     }
 
+    // ── Медиа-партнёр ──
+    let partner = null;
+    async function ensurePartner() {
+      if (partner === null) partner = await api('/api/partner') || false;
+      return partner && !partner.error ? partner : null;
+    }
+
+    const ptLogo = p => p.has_logo
+      ? `<img src="/api/partner-logo/${p.id}?v=${p.logo_v}" alt="">`
+      : esc(p.name.slice(0, 2));
+
+    // Ссылка на канал открывается внутри Telegram, а не в браузере: человек
+    // не выпадает из приложения, и переход стоит ему один тап.
+    function openPartner(p, place) {
+      send('/api/partner/click', 'POST', {id: p.id, place});
+      const url = p.url;
+      if (tg?.openTelegramLink && /^https?:\/\/t\.me\//.test(url)) tg.openTelegramLink(url);
+      else if (tg?.openLink) tg.openLink(url);
+      else window.open(url, '_blank', 'noopener');
+    }
+
+    const CHEVRON = `<svg viewBox="0 0 7 11" fill="none" stroke="currentColor"
+      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 4.5L1 10"/></svg>`;
+
+    function partnerLine(p) {
+      return `<button class="pt-line" data-pt="header">
+        <i class="pt-logo">${ptLogo(p)}</i>
+        <span>По материалам ${esc(p.name)}</span>${CHEVRON}</button>`;
+    }
+    function partnerCard(p, place, title, sub) {
+      return `<button class="pt-card" data-pt="${place}">
+        <i class="pt-logo">${ptLogo(p)}</i>
+        <div style="flex:1">
+          <div class="pt-name">${esc(title)}</div>
+          <div class="pt-sub">${esc(sub)}</div>
+        </div>
+        <div class="pt-go">Открыть</div></button>`;
+    }
+    function wirePartner(root, p) {
+      root.querySelectorAll('[data-pt]').forEach(b =>
+        b.onclick = e => { e.stopPropagation(); openPartner(p, b.dataset.pt); });
+    }
+
     // ── Новости ──
     const NEWS_SEGS = [
       ['all',   'Все',       () => true],
@@ -1520,6 +1589,7 @@
     async function loadNews() {
       const box = $('news-list');
       if (!newsList) box.innerHTML = skeleton(1);
+      await ensurePartner();
       const list = await api('/api/news');
       if (!Array.isArray(list)) {
         $('news-segs').innerHTML = '';
@@ -1552,7 +1622,8 @@
           : 'В этом разделе новостей пока нет.'}</div>`;
         return;
       }
-      box.innerHTML = list.map(n => `
+      const p = partner && !partner.error ? partner : null;
+      box.innerHTML = (p ? partnerLine(p) : '') + list.map(n => `
         <button class="news-row" data-id="${n.id}">
           <div class="news-thumb">${n.has_image
             ? `<img src="/api/news-image/${n.id}?v=${n.image_v}" alt="" loading="lazy">`
@@ -1562,14 +1633,18 @@
             ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ''}
             <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
           </div>
-        </button>`).join('');
+        </button>`).join('')
+        + (p ? partnerCard(p, 'feed', p.name,
+             `${p.audience ? p.audience + ' читателей · ' : ''}${p.tagline}`) : '');
       box.querySelectorAll('.news-row').forEach(c => c.onclick = () => openArticle(c.dataset.id));
+      if (p) wirePartner(box, p);
     }
 
     async function openArticle(id) {
       show('article');
       const box = $('article-body');
       box.innerHTML = skeleton(1);
+      await ensurePartner();
       const n = await api('/api/news/' + id);
       if (n.error) {
         box.innerHTML = '<div class="note">Новость не открылась.</div>';
@@ -1583,10 +1658,13 @@
           <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
           ${n.summary ? `<p class="lead">${esc(n.summary)}</p>` : ''}
           ${n.body ? `<p>${esc(n.body)}</p>` : ''}
-          ${n.source_url ? `<div class="pad links" style="padding-top:24px">
-            <a href="${esc(n.source_url)}" target="_blank" rel="noopener">Источник</a></div>` : ''}
+          ${(partner && !partner.error)
+            ? partnerCard(partner, 'article', `Читать в ${partner.name}`, partner.tagline)
+            : (n.source_url ? `<div class="pad links" style="padding-top:24px">
+                <a href="${esc(n.source_url)}" target="_blank" rel="noopener">Источник</a></div>` : '')}
           <div style="height:32px"></div>
         </div>`;
+      if (partner && !partner.error) wirePartner(box, partner);
     }
 
     // ── Профиль ──

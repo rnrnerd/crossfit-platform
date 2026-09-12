@@ -109,6 +109,27 @@ CREATE TABLE IF NOT EXISTS news (
     published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Медиа-партнёр раздела новостей. Строка активна одна за раз
+CREATE TABLE IF NOT EXISTS partners (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    tagline     TEXT NOT NULL DEFAULT '',      -- «Голос кроссфита»
+    url         TEXT NOT NULL DEFAULT '',      -- ссылка на канал
+    audience    TEXT NOT NULL DEFAULT '',      -- «9 495» — показываем как есть
+    logo        BYTEA,
+    logo_v      INTEGER NOT NULL DEFAULT 0,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- Переходы по каждому размещению отдельно: без этого не понять, какое
+-- место работает, и не с чем идти к партнёру продлевать
+CREATE TABLE IF NOT EXISTS partner_clicks (
+    partner_id INTEGER REFERENCES partners(id) ON DELETE CASCADE,
+    place      TEXT NOT NULL,                  -- header|article|feed
+    clicks     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (partner_id, place)
+);
+
 -- События
 CREATE TABLE IF NOT EXISTS events (
     id            SERIAL PRIMARY KEY,
@@ -507,6 +528,129 @@ async def h_me_photo(r):
             """UPDATE users SET photo=$2, photo_v=photo_v+1
                WHERE id=$1 RETURNING photo_v""", u["id"], blob)
     return _json({"avatar": f"/api/photo/{u['id']}?v={v}"})
+
+
+PARTNER_PLACES = ("header", "article", "feed")
+
+
+async def h_partner(r):
+    """Активный медиа-партнёр раздела новостей."""
+    async with db_pool.acquire() as c:
+        x = await c.fetchrow(
+            "SELECT * FROM partners WHERE is_active ORDER BY id LIMIT 1")
+    if not x:
+        return _json(None)
+    return _json({
+        "id": x["id"], "name": x["name"], "tagline": x["tagline"],
+        "url": x["url"], "audience": x["audience"],
+        "has_logo": bool(x["logo_v"]), "logo_v": x["logo_v"],
+    })
+
+
+async def h_partner_click(r):
+    """Счётчик переходов. Отвечаем сразу: интерфейс не должен ждать статистику."""
+    try:
+        body = await r.json()
+        pid = int(body.get("id"))
+        place = str(body.get("place") or "")
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    if place not in PARTNER_PLACES:
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        await c.execute(
+            """INSERT INTO partner_clicks (partner_id, place, clicks) VALUES ($1,$2,1)
+               ON CONFLICT (partner_id, place)
+               DO UPDATE SET clicks = partner_clicks.clicks + 1""", pid, place)
+    return _json({"ok": True})
+
+
+async def h_partner_logo(r):
+    if not USE_DB:
+        return web.Response(status=404)
+    try:
+        pid = int(r.match_info["id"])
+    except ValueError:
+        return web.Response(status=404)
+    async with db_pool.acquire() as c:
+        row = await c.fetchrow("SELECT logo FROM partners WHERE id=$1", pid)
+    if not row or not row["logo"]:
+        return web.Response(status=404)
+    blob = bytes(row["logo"])
+    ctype = "image/png" if blob[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+    resp = web.Response(body=blob, content_type=ctype)
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
+
+async def a_partners(r):
+    """Партнёры и переходы по размещениям — то, что показывают при продлении."""
+    if not _admin_ok(r):
+        return _need_admin()
+    async with db_pool.acquire() as c:
+        rows = await c.fetch("SELECT * FROM partners ORDER BY id")
+        clicks = await c.fetch("SELECT * FROM partner_clicks")
+    by_id = {}
+    for x in clicks:
+        by_id.setdefault(x["partner_id"], {})[x["place"]] = x["clicks"]
+    return _json([{
+        "id": p["id"], "name": p["name"], "tagline": p["tagline"], "url": p["url"],
+        "audience": p["audience"], "is_active": p["is_active"],
+        "has_logo": bool(p["logo_v"]),
+        "clicks": by_id.get(p["id"], {}),
+        "clicks_total": sum(by_id.get(p["id"], {}).values()),
+    } for p in rows])
+
+
+async def a_partner_save(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_json"}, status=400)
+    pid = r.match_info.get("id")
+    name = _clean(body.get("name"), 80)
+    if len(name) < 2:
+        return _json({"error": "invalid", "fields": {"name": "Нужно название"}}, status=400)
+    tagline = _clean(body.get("tagline"), 120)
+    url = _clean(body.get("url"), 300)
+    audience = _clean(body.get("audience"), 40)
+    active = bool(body.get("is_active", True))
+    async with db_pool.acquire() as c:
+        if pid:
+            row = await c.fetchrow(
+                """UPDATE partners SET name=$2, tagline=$3, url=$4, audience=$5, is_active=$6
+                   WHERE id=$1 RETURNING id""", int(pid), name, tagline, url, audience, active)
+            if not row:
+                return _json({"error": "not_found"}, status=404)
+            return _json({"ok": True, "id": row["id"]})
+        new_id = await c.fetchval(
+            """INSERT INTO partners (name, tagline, url, audience, is_active)
+               VALUES ($1,$2,$3,$4,$5) RETURNING id""", name, tagline, url, audience, active)
+    return _json({"ok": True, "id": new_id})
+
+
+async def a_partner_logo(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        pid = int(r.match_info["id"])
+        body = await r.json()
+        head, b64 = str(body.get("data") or "").split(",", 1)
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    if "image/jpeg" not in head and "image/png" not in head:
+        return _json({"error": "bad_format"}, status=400)
+    blob = base64.b64decode(b64, validate=True)
+    if not blob or len(blob) > 2_000_000:
+        return _json({"error": "too_big"}, status=400)
+    async with db_pool.acquire() as c:
+        v = await c.fetchval(
+            "UPDATE partners SET logo=$2, logo_v=logo_v+1 WHERE id=$1 RETURNING logo_v", pid, blob)
+    if v is None:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True, "v": v})
 
 
 async def h_clubs(r):
@@ -1838,6 +1982,9 @@ def build_web_app():
     app.router.add_patch("/api/me", h_me_save)
     app.router.add_post("/api/me/photo", h_me_photo)
     app.router.add_get("/api/clubs", h_clubs)
+    app.router.add_get("/api/partner", h_partner)
+    app.router.add_post("/api/partner/click", h_partner_click)
+    app.router.add_get("/api/partner-logo/{id}", h_partner_logo)
     app.router.add_get("/api/news", h_news)
     app.router.add_get("/api/news/{id}", h_news_one)
     app.router.add_get("/api/news-image/{id}", h_news_image)
@@ -1868,6 +2015,10 @@ def build_web_app():
     app.router.add_get("/api/admin/clubs", a_clubs)
     app.router.add_post("/api/admin/clubs", a_club_save)
     app.router.add_put("/api/admin/clubs/{id}", a_club_save)
+    app.router.add_get("/api/admin/partners", a_partners)
+    app.router.add_post("/api/admin/partners", a_partner_save)
+    app.router.add_put("/api/admin/partners/{id}", a_partner_save)
+    app.router.add_post("/api/admin/partners/{id}/logo", a_partner_logo)
     assets = BASE_DIR / "assets"
     if assets.exists():
         app.router.add_static("/assets/", assets, show_index=False)
