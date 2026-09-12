@@ -39,10 +39,12 @@ import hmac
 import json
 import asyncio
 import base64
+import html as html_mod
+import re
 import hashlib
 import logging
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import parse_qsl
 from aiohttp import web
 from dotenv import load_dotenv
@@ -106,6 +108,11 @@ CREATE TABLE IF NOT EXISTS news (
     -- откуда новость: ru — российский кроссфит, world — мировой.
     -- Словарь закрытый: на вкладках не должно появляться чужих формулировок
     category     TEXT NOT NULL DEFAULT '',          -- ru|world|''
+    -- откуда пришла новость и какой пост её породил
+    partner_id     INTEGER REFERENCES partners(id) ON DELETE SET NULL,
+    source_post_id TEXT NOT NULL DEFAULT '',
+    -- импортированные попадают в draft и ждут решения редактора
+    status         TEXT NOT NULL DEFAULT 'published',  -- published|draft|rejected
     published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -118,7 +125,11 @@ CREATE TABLE IF NOT EXISTS partners (
     audience    TEXT NOT NULL DEFAULT '',      -- «9 495» — показываем как есть
     logo        BYTEA,
     logo_v      INTEGER NOT NULL DEFAULT 0,
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    channel     TEXT NOT NULL DEFAULT '',      -- имя канала в Telegram, без @
+    -- off — не забирать, draft — складывать в черновики на модерацию.
+    -- Автопубликации нет намеренно: в авторском канале половина постов личные
+    import_mode TEXT NOT NULL DEFAULT 'off'    -- off|draft
 );
 
 -- Переходы по каждому размещению отдельно: без этого не понять, какое
@@ -194,6 +205,13 @@ ALTER TABLE divisions ADD COLUMN IF NOT EXISTS price INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS feed_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE news ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
+ALTER TABLE partners ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT '';
+ALTER TABLE partners ADD COLUMN IF NOT EXISTS import_mode TEXT NOT NULL DEFAULT 'off';
+ALTER TABLE news ADD COLUMN IF NOT EXISTS partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL;
+ALTER TABLE news ADD COLUMN IF NOT EXISTS source_post_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE news ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published';
+CREATE UNIQUE INDEX IF NOT EXISTS news_source_uniq
+    ON news (partner_id, source_post_id) WHERE source_post_id <> '';
 -- во внешнем модуле группа задаётся парой «категория + пол» вместо id дивизиона
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS feed_category TEXT NOT NULL DEFAULT '';
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS feed_gender TEXT NOT NULL DEFAULT '';
@@ -530,6 +548,163 @@ async def h_me_photo(r):
     return _json({"avatar": f"/api/photo/{u['id']}?v={v}"})
 
 
+# ── Импорт новостей из Telegram-канала ───────────────────────────────
+# Читаем публичную веб-версию канала (t.me/s/<канал>). Бот в админах канала
+# был бы надёжнее — Telegram сам присылал бы правки и удаления, — но требует
+# действия от партнёра. Разбор страницы работает без него.
+#
+# Всё импортированное попадает в черновики. Автопубликации нет намеренно:
+# в авторском канале рядом с новостями идут личные посты и шутки, и в ленту
+# соревновательной платформы они не годятся.
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_BR_RE = re.compile(r"<br\s*/?>", re.I)
+_POST_RE = re.compile(
+    r'data-post="(?P<chan>[^/"]+)/(?P<id>\d+)".*?'
+    r'(?:<time datetime="(?P<time>[^"]+)")?',
+    re.S)
+
+
+def _post_text(chunk):
+    """HTML поста → текст с сохранением переводов строк."""
+    t = _BR_RE.sub("\n", chunk)
+    t = _TAG_RE.sub("", t)
+    t = html_mod.unescape(t)
+    return "\n".join(line.strip() for line in t.split("\n")).strip()
+
+
+def _split_title(text):
+    """Заголовок — первая строка или первое предложение.
+
+    Ведущие эмодзи срезаем: в канале ими открывается почти каждый пост,
+    а в списке новостей они становятся визуальным шумом. Тело оставляем как есть.
+    """
+    first = next((l for l in text.split("\n") if l.strip()), "")
+    first = first.strip()
+    while first and not (first[0].isalnum() or first[0] in "«\"'("):
+        first = first[1:].lstrip()
+    if len(first) > 140:
+        cut = first[:140]
+        dot = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        first = (cut[:dot + 1] if dot > 60 else cut).strip()
+    rest = text[text.find(first) + len(first):].strip() if first else text
+    return first or "Без заголовка", rest
+
+
+def parse_channel(page_html):
+    """Посты со страницы канала: id, текст, время, ссылка на фото."""
+    out = []
+    parts = page_html.split('class="tgme_widget_message ')
+    for part in parts[1:]:
+        m = re.search(r'data-post="([^/"]+)/(\d+)"', part)
+        if not m:
+            continue
+        chan, pid = m.group(1), m.group(2)
+        tm = re.search(r'<time datetime="([^"]+)"', part)
+        body = re.search(
+            r'class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', part, re.S)
+        photo = re.search(r"background-image:url\('(https://[^']+)'\)", part)
+        text = _post_text(body.group(1)) if body else ""
+        if not text:
+            continue
+        out.append({
+            "post_id": pid,
+            "url": f"https://t.me/{chan}/{pid}",
+            "text": text,
+            "photo": photo.group(1) if photo else "",
+            "at": tm.group(1) if tm else "",
+        })
+    return out
+
+
+async def import_partner_news(partner):
+    """Забирает новые посты партнёра в черновики. Возвращает счётчики."""
+    import aiohttp
+    chan = partner["channel"].lstrip("@")
+    added = skipped = 0
+    timeout = aiohttp.ClientTimeout(total=25)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(f"https://t.me/s/{chan}",
+                                headers={"User-Agent": "Mozilla/5.0"}) as r:
+                if r.status != 200:
+                    return {"error": f"канал ответил {r.status}"}
+                page = await r.text()
+            posts = parse_channel(page)
+            if not posts:
+                return {"error": "на странице канала не нашлось постов"}
+
+            async with db_pool.acquire() as c:
+                have = {x["source_post_id"] for x in await c.fetch(
+                    "SELECT source_post_id FROM news WHERE partner_id=$1", partner["id"])}
+                for p in posts:
+                    if p["post_id"] in have:
+                        skipped += 1
+                        continue
+                    title, rest = _split_title(p["text"])
+                    blob = None
+                    if p["photo"]:
+                        try:
+                            async with sess.get(p["photo"]) as ir:
+                                if ir.status == 200:
+                                    raw = await ir.read()
+                                    if len(raw) <= 4_000_000:
+                                        blob = raw
+                        except Exception:
+                            blob = None
+                    at = None
+                    if p["at"]:
+                        try:
+                            at = datetime.fromisoformat(p["at"].replace("Z", "+00:00"))
+                        except ValueError:
+                            at = None
+                    await c.execute(
+                        """INSERT INTO news (title, summary, body, source_url, category,
+                                partner_id, source_post_id, status, image, image_v,
+                                published_at)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,
+                                   COALESCE($10, NOW()))""",
+                        title[:300], rest[:500], p["text"][:20000], p["url"], "",
+                        partner["id"], p["post_id"], blob, 1 if blob else 0, at)
+                    added += 1
+    except Exception as e:
+        logger.warning("Импорт из канала %s не удался: %s", chan, e)
+        return {"error": str(e)[:200]}
+    logger.info("Импорт из %s: добавлено %s, уже было %s", chan, added, skipped)
+    return {"added": added, "skipped": skipped}
+
+
+async def a_news_import(r):
+    """Ручной запуск импорта — кнопкой из админки."""
+    if not _admin_ok(r):
+        return _need_admin()
+    async with db_pool.acquire() as c:
+        p = await c.fetchrow(
+            "SELECT * FROM partners WHERE is_active AND channel <> '' ORDER BY id LIMIT 1")
+    if not p:
+        return _json({"error": "no_channel"}, status=409)
+    return _json(await import_partner_news(dict(p)))
+
+
+async def news_import_loop(app):
+    """Фоновый опрос канала. Раз в 15 минут: канал живёт медленнее."""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            async with db_pool.acquire() as c:
+                p = await c.fetchrow(
+                    """SELECT * FROM partners
+                       WHERE is_active AND channel <> '' AND import_mode = 'draft'
+                       ORDER BY id LIMIT 1""")
+            if p:
+                await import_partner_news(dict(p))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Фоновый импорт: %s", e)
+        await asyncio.sleep(15 * 60)
+
+
 PARTNER_PLACES = ("header", "article", "feed")
 
 
@@ -596,6 +771,7 @@ async def a_partners(r):
     return _json([{
         "id": p["id"], "name": p["name"], "tagline": p["tagline"], "url": p["url"],
         "audience": p["audience"], "is_active": p["is_active"],
+        "channel": p["channel"], "import_mode": p["import_mode"],
         "has_logo": bool(p["logo_v"]),
         "clicks": by_id.get(p["id"], {}),
         "clicks_total": sum(by_id.get(p["id"], {}).values()),
@@ -617,11 +793,17 @@ async def a_partner_save(r):
     url = _clean(body.get("url"), 300)
     audience = _clean(body.get("audience"), 40)
     active = bool(body.get("is_active", True))
+    channel = _clean(body.get("channel"), 64).lstrip("@")
+    mode = str(body.get("import_mode") or "off")
+    if mode not in ("off", "draft"):
+        mode = "off"
     async with db_pool.acquire() as c:
         if pid:
             row = await c.fetchrow(
-                """UPDATE partners SET name=$2, tagline=$3, url=$4, audience=$5, is_active=$6
-                   WHERE id=$1 RETURNING id""", int(pid), name, tagline, url, audience, active)
+                """UPDATE partners SET name=$2, tagline=$3, url=$4, audience=$5,
+                        is_active=$6, channel=$7, import_mode=$8
+                   WHERE id=$1 RETURNING id""",
+                int(pid), name, tagline, url, audience, active, channel, mode)
             if not row:
                 return _json({"error": "not_found"}, status=404)
             return _json({"ok": True, "id": row["id"]})
@@ -668,13 +850,14 @@ async def h_news(r):
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             f"""SELECT id, title, summary, source_url, image_v, is_featured,
-                       category, published_at
-                FROM news {'WHERE is_featured' if featured else ''}
+                       category, partner_id, published_at
+                FROM news
+                WHERE status = 'published' {'AND is_featured' if featured else ''}
                 ORDER BY published_at DESC LIMIT 40""")
     return _json([{
         "id": x["id"], "title": x["title"], "summary": x["summary"],
         "source_url": x["source_url"], "is_featured": x["is_featured"],
-        "category": x["category"],
+        "category": x["category"], "partner_id": x["partner_id"],
         "has_image": bool(x["image_v"]), "image_v": x["image_v"],
         "published_at": x["published_at"].isoformat(),
     } for x in rows])
@@ -686,12 +869,14 @@ async def h_news_one(r):
     except ValueError:
         return _json({"error": "bad_id"}, status=404)
     async with db_pool.acquire() as c:
-        x = await c.fetchrow("SELECT * FROM news WHERE id=$1", nid)
+        x = await c.fetchrow(
+            "SELECT * FROM news WHERE id=$1 AND status='published'", nid)
     if not x:
         return _json({"error": "not_found"}, status=404)
     return _json({
         "id": x["id"], "title": x["title"], "summary": x["summary"], "body": x["body"],
         "source_url": x["source_url"], "category": x["category"],
+        "partner_id": x["partner_id"],
         "has_image": bool(x["image_v"]), "image_v": x["image_v"],
         "published_at": x["published_at"].isoformat(),
     })
@@ -1830,12 +2015,14 @@ async def a_news_list(r):
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT id, title, summary, source_url, is_featured, image_v,
-                      category, published_at
-               FROM news ORDER BY published_at DESC""")
+                      category, status, partner_id, source_post_id, published_at
+               FROM news ORDER BY (status='draft') DESC, published_at DESC""")
     return _json([{
         "id": x["id"], "title": x["title"], "summary": x["summary"],
         "source_url": x["source_url"], "is_featured": x["is_featured"],
         "category": x["category"], "has_image": bool(x["image_v"]),
+        "status": x["status"], "partner_id": x["partner_id"],
+        "source_post_id": x["source_post_id"],
         "published_at": x["published_at"].isoformat(),
     } for x in rows])
 
@@ -1851,24 +2038,33 @@ async def a_news_save(r):
     title = _clean(body.get("title"), 300)
     if len(title) < 3:
         return _json({"error": "invalid", "fields": {"title": "Нужен заголовок"}}, status=400)
-    summary = _clean(body.get("summary"), 500)
-    text = str(body.get("body") or "")[:20000]
-    url = _clean(body.get("source_url"), 500)
-    feat = bool(body.get("is_featured"))
     cat = str(body.get("category") or "")
     if cat not in NEWS_CATEGORIES:
         return _json({"error": "invalid",
                       "fields": {"category": "Неизвестная категория"}}, status=400)
+
     async with db_pool.acquire() as c:
         if nid:
+            # обновляем только то, что прислали. Иначе частичный запрос стирает
+            # остальные поля — так уже терялись ссылки на исходные посты
+            cur = await c.fetchrow("SELECT * FROM news WHERE id=$1", int(nid))
+            if not cur:
+                return _json({"error": "not_found"}, status=404)
             row = await c.fetchrow(
                 """UPDATE news SET title=$2, summary=$3, body=$4, source_url=$5,
                         is_featured=$6, category=$7
                    WHERE id=$1 RETURNING id""",
-                int(nid), title, summary, text, url, feat, cat)
-            if not row:
-                return _json({"error": "not_found"}, status=404)
+                int(nid), title,
+                _clean(body["summary"], 500) if "summary" in body else cur["summary"],
+                str(body["body"] or "")[:20000] if "body" in body else cur["body"],
+                _clean(body["source_url"], 500) if "source_url" in body else cur["source_url"],
+                bool(body["is_featured"]) if "is_featured" in body else cur["is_featured"],
+                cat)
             return _json({"ok": True, "id": row["id"]})
+        summary = _clean(body.get("summary"), 500)
+        text = str(body.get("body") or "")[:20000]
+        url = _clean(body.get("source_url"), 500)
+        feat = bool(body.get("is_featured"))
         new_id = await c.fetchval(
             """INSERT INTO news (title, summary, body, source_url, is_featured, category)
                VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
@@ -1896,6 +2092,29 @@ async def a_news_image(r):
     if v is None:
         return _json({"error": "not_found"}, status=404)
     return _json({"ok": True, "v": v})
+
+
+NEWS_STATUSES = ("published", "draft", "rejected")
+
+
+async def a_news_status(r):
+    """Публикация или отклонение черновика."""
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        nid = int(r.match_info["id"])
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    st = str(body.get("status") or "")
+    if st not in NEWS_STATUSES:
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        row = await c.fetchrow(
+            "UPDATE news SET status=$2 WHERE id=$1 RETURNING id", nid, st)
+    if not row:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True})
 
 
 async def a_news_delete(r):
@@ -2011,6 +2230,8 @@ def build_web_app():
     app.router.add_post("/api/admin/news", a_news_save)
     app.router.add_put("/api/admin/news/{id}", a_news_save)
     app.router.add_post("/api/admin/news/{id}/image", a_news_image)
+    app.router.add_post("/api/admin/news/{id}/status", a_news_status)
+    app.router.add_post("/api/admin/news-import", a_news_import)
     app.router.add_delete("/api/admin/news/{id}", a_news_delete)
     app.router.add_get("/api/admin/clubs", a_clubs)
     app.router.add_post("/api/admin/clubs", a_club_save)
@@ -2031,11 +2252,19 @@ def main():
     async def on_startup(app):
         if USE_DB:
             await init_db()
+            # фоновый опрос канала партнёра, если он включён
+            app["news_import"] = asyncio.create_task(news_import_loop(app))
         else:
             logger.warning("DATABASE_URL не задан — API работать не будет")
 
+    async def on_cleanup(app):
+        task = app.get("news_import")
+        if task:
+            task.cancel()
+
     app = build_web_app()
     app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_cleanup)
     logger.info("Платформа: сервер на порту %s", port)
     web.run_app(app, host="0.0.0.0", port=port)
 

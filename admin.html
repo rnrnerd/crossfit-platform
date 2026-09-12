@@ -509,26 +509,44 @@
     if (!Array.isArray(list)) { m.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
     m.innerHTML = `
       <div class="row-between">
-        <div><h2>Новости</h2><div class="sub">${list.length} всего, из них ${
+        <div><h2>Новости</h2><div class="sub">${list.length} всего · ${
+          list.filter(n => n.status === 'draft').length} в черновиках · ${
           list.filter(n => n.is_featured).length} в слайдере на главной</div></div>
         <button class="btn" id="new-news">Новая</button>
       </div>
       <table>
-        <tr><th>Заголовок</th><th>Раздел</th><th>Дата</th><th>Картинка</th><th>Слайдер</th><th></th></tr>
+        <tr><th>Заголовок</th><th>Статус</th><th>Раздел</th><th>Дата</th><th>Картинка</th><th>Слайдер</th><th></th></tr>
         ${list.map(n => `
           <tr>
             <td><b>${esc(n.title)}</b><div class="muted">${esc(n.summary)}</div></td>
+            <td>${n.status === 'draft' ? '<span class="tag on">Черновик</span>'
+                 : n.status === 'rejected' ? '<span class="tag off">Отклонена</span>'
+                 : '<span class="tag">В эфире</span>'}${
+                 n.partner_id ? '<div class="muted">из канала</div>' : ''}</td>
             <td>${n.category ? `<span class="tag">${NEWSCAT[n.category]}</span>`
                               : '<span class="muted">—</span>'}</td>
             <td>${esc(n.published_at.slice(0, 10))}</td>
             <td>${n.has_image ? '<span class="tag">есть</span>' : '<span class="muted">нет</span>'}</td>
             <td>${n.is_featured ? '<span class="tag on">да</span>' : '<span class="muted">нет</span>'}</td>
-            <td><button class="btn link" data-ed="${n.id}">Изменить</button>
+            <td>${n.status === 'draft'
+                  ? `<button class="btn link" data-pub="${n.id}">Опубликовать</button>
+                     <button class="btn link danger" data-rej="${n.id}">Отклонить</button>`
+                  : ''}
+                <button class="btn link" data-ed="${n.id}">Изменить</button>
                 <button class="btn link danger" data-del="${n.id}">Удалить</button></td>
           </tr>`).join('')}
       </table>`;
     $('new-news').onclick = () => editNews(null);
     m.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => editNews(b.dataset.ed, list));
+    const setStatus = async (id, status, msg) => {
+      const res = await send(`/api/admin/news/${id}/status`, 'POST', {status});
+      if (res.error) { toast('Не получилось'); return; }
+      toast(msg); listNews();
+    };
+    m.querySelectorAll('[data-pub]').forEach(b => b.onclick = () =>
+      setStatus(b.dataset.pub, 'published', 'Опубликована'));
+    m.querySelectorAll('[data-rej]').forEach(b => b.onclick = () =>
+      setStatus(b.dataset.rej, 'rejected', 'Отклонена'));
     m.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
       if (!confirm('Удалить новость? Отменить нельзя.')) return;
       await send('/api/admin/news/' + b.dataset.del, 'DELETE');
@@ -663,6 +681,12 @@
             ${F('p-tag-' + p.id, 'Подпись', p.tagline)}
             ${F('p-url-' + p.id, 'Ссылка на канал', p.url, 'url')}
             ${F('p-aud-' + p.id, 'Аудитория', p.audience)}
+            ${F('p-chan-' + p.id, 'Канал в Telegram (без @)', p.channel)}
+            <div class="f"><label for="p-imp-${p.id}">Забирать посты</label>
+              <select id="p-imp-${p.id}">
+                <option value="off"${p.import_mode === 'off' ? ' selected' : ''}>Нет</option>
+                <option value="draft"${p.import_mode === 'draft' ? ' selected' : ''}>Да, в черновики</option>
+              </select></div>
             <div class="f"><label for="p-act-${p.id}">Показывать</label>
               <select id="p-act-${p.id}">
                 <option value="1"${p.is_active ? ' selected' : ''}>Да</option>
@@ -683,7 +707,11 @@
               <tr><td>${v}</td><td class="num">${p.clicks[k] || 0}</td></tr>`).join('')}
             <tr><td><b>Всего</b></td><td class="num"><b>${p.clicks_total}</b></td></tr>
           </table>
-          <div class="bar"><button class="btn" data-ptsave="${p.id}">Сохранить</button></div>
+          <div class="bar"><button class="btn" data-ptsave="${p.id}">Сохранить</button>
+            <button class="btn quiet" id="pt-import">Забрать посты сейчас</button></div>
+          <div class="warn">Всё забранное попадает в <b>черновики</b> и ждёт решения
+            в разделе «Новости». Автопубликации нет: в авторском канале рядом
+            с новостями идут личные посты.</div>
         </div>`).join('') || '<div class="note">Партнёров нет.</div>'}`;
 
     $('new-pt').onclick = async () => {
@@ -698,10 +726,19 @@
       const res = await send('/api/admin/partners/' + id, 'PUT', {
         name: $('p-name-' + id).value, tagline: $('p-tag-' + id).value,
         url: $('p-url-' + id).value, audience: $('p-aud-' + id).value,
+        channel: $('p-chan-' + id).value, import_mode: $('p-imp-' + id).value,
         is_active: $('p-act-' + id).value === '1'});
       if (res.error) { toast(Object.values(res.fields || {})[0] || 'Не сохранилось'); return; }
       toast('Сохранено');
     });
+    const imp = $('pt-import');
+    if (imp) imp.onclick = async () => {
+      imp.disabled = true; imp.textContent = 'Забираем…';
+      const res = await send('/api/admin/news-import', 'POST', {});
+      imp.disabled = false; imp.textContent = 'Забрать посты сейчас';
+      if (res.error) { toast(res.error === 'no_channel' ? 'Канал не задан' : res.error); return; }
+      toast(`Добавлено ${res.added}, уже было ${res.skipped}`);
+    };
     m.querySelectorAll('[data-ptlogo]').forEach(b => b.onclick = async () => {
       const id = b.dataset.ptlogo;
       const data = await pickImage(512, 512);

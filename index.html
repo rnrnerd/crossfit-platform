@@ -446,6 +446,17 @@
     .pt-sub { font-size:13px; color:var(--steel); margin-top:3px; }
     .pt-go { flex:none; font-size:13px; font-weight:500; color:var(--accent); }
 
+    /* Метка источника в превью. Кнопка внутри кнопки, поэтому у неё свой
+       отклик и свой обработчик со stopPropagation: тап по метке ведёт
+       в канал, тап по остальной строке — в нашу статью. */
+    .pt-tag { display:inline-flex; align-items:center; gap:6px; margin-top:8px;
+      background:var(--plate); border:none; border-radius:7px; padding:5px 9px 5px 6px;
+      cursor:pointer; font-size:11px; font-weight:600; color:var(--chalk); }
+    .pt-tag:active { background:rgba(255,255,255,.1); }
+    .pt-tag i { width:16px; height:16px; border-radius:4px; overflow:hidden; flex:none;
+      display:block; }
+    .pt-tag img { width:100%; height:100%; object-fit:cover; }
+
     .note { padding:56px var(--pad); text-align:center; color:var(--steel); font-size:15px; }
     .note.tight { padding:28px var(--pad); }
     .sk { background:var(--plate); border-radius:8px; }
@@ -1548,9 +1559,9 @@
 
     // Ссылка на канал открывается внутри Telegram, а не в браузере: человек
     // не выпадает из приложения, и переход стоит ему один тап.
-    function openPartner(p, place) {
+    function openPartner(p, place, url) {
       send('/api/partner/click', 'POST', {id: p.id, place});
-      const url = p.url;
+      url = url || p.url;
       if (tg?.openTelegramLink && /^https?:\/\/t\.me\//.test(url)) tg.openTelegramLink(url);
       else if (tg?.openLink) tg.openLink(url);
       else window.open(url, '_blank', 'noopener');
@@ -1564,6 +1575,10 @@
         <i class="pt-logo">${ptLogo(p)}</i>
         <span>По материалам ${esc(p.name)}</span>${CHEVRON}</button>`;
     }
+    function partnerTag(p) {
+      return `<span class="pt-tag" data-pt="preview" role="button" tabindex="0">
+        <i>${ptLogo(p)}</i>Новости из ${esc(p.name)}</span>`;
+    }
     function partnerCard(p, place, title, sub) {
       return `<button class="pt-card" data-pt="${place}">
         <i class="pt-logo">${ptLogo(p)}</i>
@@ -1573,9 +1588,9 @@
         </div>
         <div class="pt-go">Открыть</div></button>`;
     }
-    function wirePartner(root, p) {
+    function wirePartner(root, p, url) {
       root.querySelectorAll('[data-pt]').forEach(b =>
-        b.onclick = e => { e.stopPropagation(); openPartner(p, b.dataset.pt); });
+        b.onclick = e => { e.stopPropagation(); openPartner(p, b.dataset.pt, url); });
     }
 
     // ── Новости ──
@@ -1632,12 +1647,25 @@
             <div class="news-title">${esc(n.title)}</div>
             ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ''}
             <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
+            ${p && n.partner_id === p.id ? partnerTag(p) : ''}
           </div>
         </button>`).join('')
         + (p ? partnerCard(p, 'feed', p.name,
              `${p.audience ? p.audience + ' читателей · ' : ''}${p.tagline}`) : '');
       box.querySelectorAll('.news-row').forEach(c => c.onclick = () => openArticle(c.dataset.id));
-      if (p) wirePartner(box, p);
+      if (p) {
+        // метка ведёт на исходный пост, блок в конце ленты — на канал
+        box.querySelectorAll('.news-row').forEach(row => {
+          const tag = row.querySelector('.pt-tag');
+          if (!tag) return;
+          const n = list.find(x => String(x.id) === row.dataset.id);
+          tag.onclick = e => { e.stopPropagation(); openPartner(p, 'preview', n?.source_url); };
+        });
+        const card = box.querySelector('.pt-card');
+        if (card) card.onclick = () => openPartner(p, 'feed');
+        const line = box.querySelector('.pt-line');
+        if (line) line.onclick = () => openPartner(p, 'header');
+      }
     }
 
     async function openArticle(id) {
@@ -1658,13 +1686,17 @@
           <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
           ${n.summary ? `<p class="lead">${esc(n.summary)}</p>` : ''}
           ${n.body ? `<p>${esc(n.body)}</p>` : ''}
-          ${(partner && !partner.error)
-            ? partnerCard(partner, 'article', `Читать в ${partner.name}`, partner.tagline)
-            : (n.source_url ? `<div class="pad links" style="padding-top:24px">
-                <a href="${esc(n.source_url)}" target="_blank" rel="noopener">Источник</a></div>` : '')}
+          ${(partner && !partner.error && n.partner_id === partner.id)
+            ? partnerCard(partner, 'article', `Читать в ${partner.name}`,
+                          'Оригинал поста в канале')
+            : (partner && !partner.error)
+              ? partnerCard(partner, 'article', `Читать в ${partner.name}`, partner.tagline)
+              : (n.source_url ? `<div class="pad links" style="padding-top:24px">
+                  <a href="${esc(n.source_url)}" target="_blank" rel="noopener">Источник</a></div>` : '')}
           <div style="height:32px"></div>
         </div>`;
-      if (partner && !partner.error) wirePartner(box, partner);
+      if (partner && !partner.error)
+        wirePartner(box, partner, n.partner_id === partner.id ? n.source_url : null);
     }
 
     // ── Профиль ──
