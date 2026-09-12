@@ -204,6 +204,7 @@
   const STATUS = {draft:'Черновик', registration:'Регистрация', live:'Идёт', finished:'Завершено'};
   const RULE = {any:'Любой', male:'Мужской', female:'Женский', mixed:'Микс'};
   const LEVEL = {'':'—', sc:'Sc', bg:'Bg', rx:'Rx', elite:'Elite'};
+  const NEWSCAT = {'':'Без раздела', ru:'CF Россия', world:'CF Мир'};
   const fmtMoney = v => v ? String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽' : 'Бесплатно';
 
   // Уменьшаем на клиенте: с диска прилетают файлы по 5–15 МБ
@@ -511,10 +512,12 @@
         <button class="btn" id="new-news">Новая</button>
       </div>
       <table>
-        <tr><th>Заголовок</th><th>Дата</th><th>Картинка</th><th>Слайдер</th><th></th></tr>
+        <tr><th>Заголовок</th><th>Раздел</th><th>Дата</th><th>Картинка</th><th>Слайдер</th><th></th></tr>
         ${list.map(n => `
           <tr>
             <td><b>${esc(n.title)}</b><div class="muted">${esc(n.summary)}</div></td>
+            <td>${n.category ? `<span class="tag">${NEWSCAT[n.category]}</span>`
+                              : '<span class="muted">—</span>'}</td>
             <td>${esc(n.published_at.slice(0, 10))}</td>
             <td>${n.has_image ? '<span class="tag">есть</span>' : '<span class="muted">нет</span>'}</td>
             <td>${n.is_featured ? '<span class="tag on">да</span>' : '<span class="muted">нет</span>'}</td>
@@ -547,6 +550,10 @@
           <input id="n-sum" value="${esc(full.summary ?? n.summary ?? '')}" /></div>
         <div class="f wide"><label for="n-body">Текст</label>
           <textarea id="n-body">${esc(full.body ?? '')}</textarea></div>
+        <div class="f"><label for="n-cat">Раздел</label><select id="n-cat">
+          ${Object.entries(NEWSCAT).map(([k, v]) =>
+            `<option value="${k}"${(full.category ?? n.category ?? '') === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
         <div class="f"><label for="n-feat">В слайдере на главной</label><select id="n-feat">
           <option value="0">Нет</option>
           <option value="1"${(full.is_featured ?? n.is_featured) ? ' selected' : ''}>Да</option>
@@ -567,6 +574,7 @@
     $('n-save').onclick = async () => {
       const body = {title: $('n-title').value, summary: $('n-sum').value,
                     body: $('n-body').value, source_url: $('n-url').value,
+                    category: $('n-cat').value,
                     is_featured: $('n-feat').value === '1'};
       const res = await send(id ? '/api/admin/news/' + id : '/api/admin/news',
                              id ? 'PUT' : 'POST', body);

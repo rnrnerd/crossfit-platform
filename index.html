@@ -56,10 +56,20 @@
     .brand { font-size:15px; font-weight:700; color:var(--accent); }
     .back { flex:none; width:44px; height:44px; margin-left:-12px; border:none;
       background:none; display:grid; place-items:center; cursor:pointer; }
-    .ava { flex:none; width:32px; height:32px; border-radius:50%; background:var(--plate);
-      margin-left:auto; display:grid; place-items:center; overflow:hidden;
+    /* Кнопка профиля. Раньше это был <div> без обработчика: выглядел как
+       элемент управления и ничего не делал. Точка акцентом появляется, когда
+       профиль не заполнен — без имени и пола нельзя подать заявку. */
+    .ava { position:relative; flex:none; width:44px; height:44px; margin-left:auto;
+      margin-right:-10px; border:none; background:none; padding:0; cursor:pointer;
+      display:grid; place-items:center; }
+    .ava i { width:32px; height:32px; border-radius:50%; background:var(--plate);
+      display:grid; place-items:center; overflow:hidden; font-style:normal;
       font-size:12px; font-weight:700; color:var(--steel); }
     .ava img { width:100%; height:100%; object-fit:cover; }
+    .ava:active i { opacity:.7; }
+    .ava.todo::after { content:''; position:absolute; top:5px; right:5px;
+      width:9px; height:9px; border-radius:50%; background:var(--accent);
+      box-shadow:0 0 0 2px var(--void); }
 
     .screen { display:none; }
     .screen.visible { display:block; }
@@ -458,7 +468,10 @@
     <div class="lb-pinned" id="lb-pinned" hidden></div>
   </section>
   <section class="screen" id="screen-my"><div id="my-list"></div></section>
-  <section class="screen" id="screen-news"><div id="news-list"></div></section>
+  <section class="screen" id="screen-news">
+    <div class="segs" id="news-segs"></div>
+    <div id="news-list"></div>
+  </section>
   <section class="screen" id="screen-article"><div id="article-body"></div></section>
   <section class="screen" id="screen-profile"><div id="profile-body"></div></section>
 
@@ -677,8 +690,12 @@
     let me = null, myIds = new Set();
 
     function renderBar(name, innerTitle) {
-      const avatar = `<div class="ava">${me?.user?.avatar
-        ? `<img src="${esc(me.user.avatar)}" alt="">` : esc(initials(me?.user?.name))}</div>`;
+      // профиль не заполнен — это блокирует подачу заявки, поэтому кнопка
+      // об этом сообщает, а не молчит
+      const todo = me && !me.error && !me.profile_complete;
+      const avatar = `<button class="ava${todo ? ' todo' : ''}" id="go-profile"
+        aria-label="${todo ? 'Профиль не заполнен' : 'Профиль'}"><i>${me?.user?.avatar
+        ? `<img src="${esc(me.user.avatar)}" alt="">` : esc(initials(me?.user?.name))}</i></button>`;
       if (name === 'event' || name === 'article') {
         $('bar').innerHTML = `
           <button class="back" id="go-back" aria-label="Назад">
@@ -690,6 +707,8 @@
         $('go-back').onclick = () => show(backTo);
       } else {
         $('bar').innerHTML = `<div class="brand">${TITLES[name]}</div>${avatar}`;
+        const go = $('go-profile');
+        if (go) go.onclick = () => show('profile');
       }
     }
 
@@ -1491,16 +1510,46 @@
     }
 
     // ── Новости ──
+    const NEWS_SEGS = [
+      ['all',   'Все',       () => true],
+      ['ru',    'CF Россия', n => n.category === 'ru'],
+      ['world', 'CF Мир',    n => n.category === 'world'],
+    ];
+    let newsSeg = 'all', newsList = null;
+
     async function loadNews() {
       const box = $('news-list');
-      if (!allNews) box.innerHTML = skeleton(1);
+      if (!newsList) box.innerHTML = skeleton(1);
       const list = await api('/api/news');
       if (!Array.isArray(list)) {
+        $('news-segs').innerHTML = '';
         box.innerHTML = '<div class="note">Новости не загрузились.<br>Проверьте связь и откройте вкладку заново.</div>';
         return;
       }
+      newsList = list;
+      renderNewsSegs();
+      renderNewsList();
+    }
+
+    function renderNewsSegs() {
+      $('news-segs').innerHTML = NEWS_SEGS.map(([key, label, test]) => {
+        const n = newsList.filter(test).length;
+        return `<button class="seg" role="tab" data-seg="${key}" aria-selected="${key === newsSeg}">
+          ${label}${n ? `<b class="num">${n}</b>` : ''}</button>`;
+      }).join('');
+      $('news-segs').querySelectorAll('.seg').forEach(b => b.onclick = () => {
+        newsSeg = b.dataset.seg; renderNewsSegs(); renderNewsList();
+      });
+    }
+
+    function renderNewsList() {
+      const box = $('news-list');
+      const test = NEWS_SEGS.find(s => s[0] === newsSeg)[2];
+      const list = newsList.filter(test);
       if (!list.length) {
-        box.innerHTML = '<div class="note">Новостей пока нет.</div>';
+        box.innerHTML = `<div class="note">${newsSeg === 'all'
+          ? 'Новостей пока нет.'
+          : 'В этом разделе новостей пока нет.'}</div>`;
         return;
       }
       box.innerHTML = list.map(n => `

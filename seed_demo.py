@@ -342,6 +342,7 @@ async def main():
                             round(58 + (i * 3.7) % 42, 1))
 
         # ── Новости ──────────────────────────────────────────────────
+        # (раздел, в слайдере, заголовок, краткое, текст)
         NEWS = [
             (True,  "Отбор на финал: правила сезона 2026",
              "Федерация опубликовала регламент отбора — четыре онлайн-этапа и два очных.",
@@ -367,16 +368,31 @@ async def main():
              "Регистрация закроется через неделю.",
              "Осталось ограниченное число мест в дивизионе Rx мужчины."),
         ]
+        # мировой кроссфит — чтобы вкладка «CF Мир» не была пустой
+        WORLD = [
+            (True,  "CrossFit Games 2026: обновлён формат финала",
+             "Организаторы сократили число финалистов и добавили командный день.",
+             "В финал выходят 30 атлетов вместо 40, добавлен отдельный командный день."),
+            (False, "Европейский отбор пройдёт в Мадриде",
+             "Даты и площадка объявлены за полгода до старта.",
+             "Площадка рассчитана на четыре тысячи зрителей."),
+            (False, "Новые стандарты движений в гимнастике",
+             "Уточнены требования к выходу силой и подъёму разгибом.",
+             "Изменения вступают в силу со следующего сезона."),
+        ]
+        CATS = ["ru"] * len(NEWS) + ["world"] * len(WORLD)
+        NEWS = NEWS + WORLD
         for i, (feat, title, summary, body_text) in enumerate(NEWS):
             await c.execute(
                 """INSERT INTO news (title, summary, body, image, image_v,
-                                     is_featured, published_at, source_url)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                                     is_featured, published_at, source_url, category)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
                 title, summary, body_text,
                 news_image(title) if feat or i % 2 == 0 else None,
                 int(time.time()) % 100000 if feat or i % 2 == 0 else 0,
                 feat, datetime.now(timezone.utc) - timedelta(days=i * 2, hours=i),
-                "https://t.me/crossfit_ru" if i % 3 == 0 else "")
+                "https://t.me/crossfit_ru" if i % 3 == 0 else "",
+                CATS[i])
 
         async def make_div(eid, name, team_size, rule, ord_, price=0, level=''):
             return await c.fetchval(

@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS news (
     image        BYTEA,
     image_v      INTEGER NOT NULL DEFAULT 0,
     is_featured  BOOLEAN NOT NULL DEFAULT FALSE,
+    -- откуда новость: ru — российский кроссфит, world — мировой.
+    -- Словарь закрытый: на вкладках не должно появляться чужих формулировок
+    category     TEXT NOT NULL DEFAULT '',          -- ru|world|''
     published_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -169,6 +172,7 @@ CREATE TABLE IF NOT EXISTS divisions (
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS price INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT '';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS feed_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE news ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
 -- во внешнем модуле группа задаётся парой «категория + пол» вместо id дивизиона
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS feed_category TEXT NOT NULL DEFAULT '';
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS feed_gender TEXT NOT NULL DEFAULT '';
@@ -519,12 +523,14 @@ async def h_news(r):
     featured = r.query.get("featured") == "1"
     async with db_pool.acquire() as c:
         rows = await c.fetch(
-            f"""SELECT id, title, summary, source_url, image_v, is_featured, published_at
+            f"""SELECT id, title, summary, source_url, image_v, is_featured,
+                       category, published_at
                 FROM news {'WHERE is_featured' if featured else ''}
                 ORDER BY published_at DESC LIMIT 40""")
     return _json([{
         "id": x["id"], "title": x["title"], "summary": x["summary"],
         "source_url": x["source_url"], "is_featured": x["is_featured"],
+        "category": x["category"],
         "has_image": bool(x["image_v"]), "image_v": x["image_v"],
         "published_at": x["published_at"].isoformat(),
     } for x in rows])
@@ -541,7 +547,8 @@ async def h_news_one(r):
         return _json({"error": "not_found"}, status=404)
     return _json({
         "id": x["id"], "title": x["title"], "summary": x["summary"], "body": x["body"],
-        "source_url": x["source_url"], "has_image": bool(x["image_v"]), "image_v": x["image_v"],
+        "source_url": x["source_url"], "category": x["category"],
+        "has_image": bool(x["image_v"]), "image_v": x["image_v"],
         "published_at": x["published_at"].isoformat(),
     })
 
@@ -1387,6 +1394,7 @@ def _date(v):
 
 
 EVENT_STATUSES = ("draft", "registration", "live", "finished")
+NEWS_CATEGORIES = ("", "ru", "world")
 GENDER_RULES = ("any", "male", "female", "mixed")
 LEVELS = ("", "sc", "bg", "rx", "elite")
 
@@ -1677,12 +1685,13 @@ async def a_news_list(r):
         return _need_admin()
     async with db_pool.acquire() as c:
         rows = await c.fetch(
-            """SELECT id, title, summary, source_url, is_featured, image_v, published_at
+            """SELECT id, title, summary, source_url, is_featured, image_v,
+                      category, published_at
                FROM news ORDER BY published_at DESC""")
     return _json([{
         "id": x["id"], "title": x["title"], "summary": x["summary"],
         "source_url": x["source_url"], "is_featured": x["is_featured"],
-        "has_image": bool(x["image_v"]),
+        "category": x["category"], "has_image": bool(x["image_v"]),
         "published_at": x["published_at"].isoformat(),
     } for x in rows])
 
@@ -1702,17 +1711,24 @@ async def a_news_save(r):
     text = str(body.get("body") or "")[:20000]
     url = _clean(body.get("source_url"), 500)
     feat = bool(body.get("is_featured"))
+    cat = str(body.get("category") or "")
+    if cat not in NEWS_CATEGORIES:
+        return _json({"error": "invalid",
+                      "fields": {"category": "Неизвестная категория"}}, status=400)
     async with db_pool.acquire() as c:
         if nid:
             row = await c.fetchrow(
-                """UPDATE news SET title=$2, summary=$3, body=$4, source_url=$5, is_featured=$6
-                   WHERE id=$1 RETURNING id""", int(nid), title, summary, text, url, feat)
+                """UPDATE news SET title=$2, summary=$3, body=$4, source_url=$5,
+                        is_featured=$6, category=$7
+                   WHERE id=$1 RETURNING id""",
+                int(nid), title, summary, text, url, feat, cat)
             if not row:
                 return _json({"error": "not_found"}, status=404)
             return _json({"ok": True, "id": row["id"]})
         new_id = await c.fetchval(
-            """INSERT INTO news (title, summary, body, source_url, is_featured)
-               VALUES ($1,$2,$3,$4,$5) RETURNING id""", title, summary, text, url, feat)
+            """INSERT INTO news (title, summary, body, source_url, is_featured, category)
+               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
+            title, summary, text, url, feat, cat)
     return _json({"ok": True, "id": new_id})
 
 
