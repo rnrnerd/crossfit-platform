@@ -186,7 +186,7 @@ async def main():
         # ── События ──────────────────────────────────────────────────
         async def make_event(slug, title, city, venue, d1, d2, status, descr,
                              reg1=None, reg2=None, q1=None, q2=None, tg="", ig="",
-                             with_banner=True, with_mark=True):
+                             with_banner=True, with_mark=True, organizer=None):
             # часть событий намеренно идёт без картинок: так на стенде видно
             # запасные варианты — типографическую плашку и букву в круге
             eid = await c.fetchval(
@@ -204,9 +204,11 @@ async def main():
                 mark(title) if with_mark else None,
                 int(time.time()) % 100000 if with_mark else 0,
                 owner, reg1, reg2, q1, q2, tg, ig)
+            # организатор у каждого старта свой: если посадить владельца на все,
+            # у него в «Работе на стартах» окажется весь каталог
             await c.execute(
                 """INSERT INTO event_staff (event_id,user_id,role,is_creator)
-                   VALUES ($1,$2,'organizer',TRUE)""", eid, owner)
+                   VALUES ($1,$2,'organizer',TRUE)""", eid, organizer or owner)
             return eid
 
         ev_battle = await make_event(
@@ -273,7 +275,9 @@ async def main():
                 # канал есть у каждого старта: блок «Организатор» — часть карточки,
                 # а не украшение, и на стенде он не должен пропадать через раз
                 tg="https://t.me/" + slug.replace("-", "_"),
-                with_banner=ban, with_mark=mk)
+                with_banner=ban, with_mark=mk,
+                # каталог наполняют чужие старты, а не свои
+                organizer=users[OTHERS[sum(map(ord, slug)) % len(OTHERS)]])
             # набор уровней у каждого старта свой — так на превью видно разные плашки
             LEVEL_SETS = [["rx"], ["inter", "rx"], ["bg", "inter", "rx"], ["rx", "elite"],
                           ["inter", "rx", "elite"]]

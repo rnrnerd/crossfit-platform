@@ -339,6 +339,9 @@
         попал в протокол, заполните у него «Категория в модуле» и «Пол в модуле» —
         модуль знает не её, а пару «категория + пол» в своих терминах.</div>` : ''}
 
+      <div class="row-between" style="margin-top:34px"><h2>Судьи и организаторы</h2></div>
+      <div id="staff"><div class="note">Загрузка…</div></div>
+
       <div class="row-between" style="margin-top:34px"><h2>Заявки</h2></div>
       <div id="entries"><div class="note">Загрузка…</div></div>
       ` : ''}`;
@@ -350,6 +353,7 @@
       $('up-mark').onclick = () => uploadEventImage(id, 'mark', 512, 512);
       $('new-div').onclick = () => divRow(id, null);
       renderDivs(id, ev.divisions, !!ev.feed_url);
+      loadStaff(id);
       loadEntries(id);
     }
   }
@@ -471,6 +475,79 @@
         return;
       }
       toast('Сохранено'); editEvent(eid);
+    };
+  }
+
+  // ── Судьи и организаторы ──
+  // Назначить можно только того, кто уже открывал приложение: до этого строки
+  // в users нет и роль связывать не с чем. Отдельного входа судье не заводим —
+  // он приходит из мини-аппа, и Telegram уже сказал, кто он.
+  const STAFF_ROLE = {organizer: 'Организатор', judge: 'Судья'};
+
+  async function loadStaff(eid) {
+    const box = $('staff');
+    const list = await api(`/api/admin/events/${eid}/staff`);
+    if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    box.innerHTML = `
+      ${list.length ? `<table>
+        <tr><th>Человек</th><th>Роль</th><th>Город</th><th></th></tr>
+        ${list.map(x => `
+          <tr>
+            <td><b>${esc(x.name)}</b>${x.username
+              ? `<div class="muted">@${esc(x.username)}</div>` : ''}</td>
+            <td><span class="tag">${esc(STAFF_ROLE[x.role] || x.role)}</span>${
+              x.is_creator ? ' <span class="tag off">создатель</span>' : ''}</td>
+            <td>${esc(x.city || '—')}</td>
+            <td><button class="btn link danger" data-off="${x.user_id}">Снять</button></td>
+          </tr>`).join('')}
+      </table>` : '<div class="note">Пока никто не назначен.</div>'}
+      <div class="grid" style="margin-top:14px">
+        <div class="f"><label for="st-q">Найти человека</label>
+          <input id="st-q" placeholder="Имя, @username или tg_id" autocomplete="off"></div>
+        <div class="f"><label for="st-role">Роль</label><select id="st-role">
+          <option value="judge">Судья</option>
+          <option value="organizer">Организатор</option>
+        </select></div>
+      </div>
+      <div id="st-found"></div>`;
+
+    box.querySelectorAll('[data-off]').forEach(b => b.onclick = async () => {
+      const res = await send(`/api/admin/events/${eid}/staff/${b.dataset.off}`, 'DELETE');
+      if (res.error) {
+        toast(res.error === 'last_organizer'
+          ? 'Это последний организатор — сначала назначьте другого' : 'Не получилось');
+        return;
+      }
+      toast('Снят'); loadStaff(eid);
+    });
+
+    let t;
+    $('st-q').oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = $('st-q').value.trim();
+        const found = $('st-found');
+        if (q.length < 2) { found.innerHTML = ''; return; }
+        const users = await api('/api/admin/users?q=' + encodeURIComponent(q));
+        if (!Array.isArray(users) || !users.length) {
+          found.innerHTML = '<div class="note">Никого не нашлось. Человек должен '
+            + 'хотя бы раз открыть приложение — иначе его ещё нет в базе.</div>';
+          return;
+        }
+        found.innerHTML = `<table>${users.map(u => `
+          <tr>
+            <td><b>${esc(u.name)}</b>${u.username
+              ? `<div class="muted">@${esc(u.username)}</div>` : ''}</td>
+            <td>${esc(u.city || '—')}</td>
+            <td><button class="btn link" data-add="${u.id}">Назначить</button></td>
+          </tr>`).join('')}</table>`;
+        found.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => {
+          const res = await send(`/api/admin/events/${eid}/staff`, 'POST',
+            {user_id: +b.dataset.add, role: $('st-role').value});
+          if (res.error) { toast('Не получилось'); return; }
+          toast('Назначен'); loadStaff(eid);
+        });
+      }, 250);
     };
   }
 

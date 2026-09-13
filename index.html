@@ -1616,6 +1616,8 @@
     }
 
     // ── Мои соревнования ──
+    const STAFF_ROLE = {organizer: 'Организатор', judge: 'Судья'};
+
     async function loadMy() {
       const box = $('my-list');
       box.innerHTML = skeleton(1);
@@ -1625,11 +1627,14 @@
         return;
       }
       const list = me.my_events || [];
-      if (!list.length) {
+      // Работа на старте — отдельный список: судья приходит сюда не за своей
+      // заявкой, а за своим стартом, и путать одно с другим нельзя.
+      const staff = me.staff_of || [];
+      if (!list.length && !staff.length) {
         box.innerHTML = '<div class="note">Вы пока никуда не заявлены.<br>Выберите старт на главной или в поиске.</div>';
         return;
       }
-      box.innerHTML = list.map(e => {
+      const entryRows = list.map(e => {
         const [tone, text] = stateLine(e);
         return `
         <button class="my-row" data-id="${e.id}">
@@ -1641,6 +1646,21 @@
           </div>
         </button>`;
       }).join('');
+      const staffRows = staff.map(e => `
+        <button class="my-row" data-id="${e.id}">
+          <div class="mark sm">${markHTML(e)}</div>
+          <div>
+            <div class="my-title">${esc(e.title)}</div>
+            <div class="row-sub">${esc(STAFF_ROLE[e.role] || e.role)}${
+              e.date_start ? ', ' + esc(fmtDates(e.date_start, e.date_end)) : ''}</div>
+          </div>
+        </button>`).join('');
+
+      box.innerHTML = staff.length
+        ? `<div class="h">Работа на стартах</div>${staffRows}
+           <div class="h">Мои заявки</div>${entryRows
+             || '<div class="note">Вы пока никуда не заявлены.</div>'}`
+        : entryRows;
       box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
     }
 

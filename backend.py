@@ -439,9 +439,14 @@ async def h_me(r):
                JOIN divisions d ON d.id = en.division_id
                WHERE m.user_id=$1 AND en.status='active'
                ORDER BY e.date_start DESC NULLS LAST""", u["id"])
+        # только предстоящее и идущее: судья приходит сюда за ближайшим стартом,
+        # а не за архивом. Прошлые события остаются в админке организатора.
         staff_of = await c.fetch(
-            """SELECT e.id, e.title, s.role FROM event_staff s
-               JOIN events e ON e.id = s.event_id WHERE s.user_id=$1""", u["id"])
+            """SELECT e.id, e.title, e.status, e.date_start, e.date_end, e.mark_v,
+                      s.role
+               FROM event_staff s JOIN events e ON e.id = s.event_id
+               WHERE s.user_id=$1 AND e.status <> 'finished'
+               ORDER BY e.date_start NULLS LAST""", u["id"])
         club = await c.fetchval(
             "SELECT name FROM clubs WHERE id=$1", u["club_id"]) if u.get("club_id") else None
     return _json({
@@ -453,7 +458,11 @@ async def h_me(r):
             "reg_closes_at": str(x["reg_closes_at"] or ""),
             "has_mark": bool(x["mark_v"]),
         } for x in my_entries],
-        "staff_of": [dict(x) for x in staff_of],
+        "staff_of": [dict(x) | {
+            "date_start": str(x["date_start"] or ""),
+            "date_end": str(x["date_end"] or ""),
+            "has_mark": bool(x["mark_v"]),
+        } for x in staff_of],
     })
 
 
@@ -1993,6 +2002,135 @@ async def a_entries(r):
     } for x in rows])
 
 
+STAFF_ROLES = ("organizer", "judge")
+
+
+async def staff_role(c, event_id, user_id):
+    """Роль человека на событии или None.
+
+    Единственная проверка прав для судейских и организаторских запросов.
+    Механизма входа она не заводит: судья приходит из мини-аппа, и Telegram
+    уже сказал, кто он, — остаётся посмотреть, звали ли его на это событие.
+    """
+    return await c.fetchval(
+        "SELECT role FROM event_staff WHERE event_id=$1 AND user_id=$2",
+        int(event_id), int(user_id))
+
+
+async def require_staff(r, event_id, roles=STAFF_ROLES):
+    """(пользователь, роль) либо ответ с отказом.
+
+    Владелец платформы проходит по паролю и без назначения: иначе он не смог бы
+    починить чужое событие в день старта.
+    """
+    if _admin_ok(r):
+        return {"id": None, "name": "Оператор"}, "owner"
+    u = await current_user(r)
+    if not u:
+        return None, _need_auth()
+    async with db_pool.acquire() as c:
+        role = await staff_role(c, event_id, u["id"])
+    if role not in roles:
+        return None, _json({"error": "forbidden"}, status=403)
+    return u, role
+
+
+async def a_users(r):
+    """Поиск человека для назначения: по имени, username или tg_id.
+
+    Назначить можно только того, кто уже открывал приложение, — до этого
+    строки в `users` нет и связывать роль не с чем.
+    """
+    if not _admin_ok(r):
+        return _need_admin()
+    q = _clean(r.query.get("q"), 80)
+    if len(q) < 2:
+        return _json([])
+    like = f"%{q.lower()}%"
+    digits = q.lstrip("@") if q.lstrip("@").isdigit() else None
+    async with db_pool.acquire() as c:
+        rows = await c.fetch(
+            """SELECT id, name, username, city, tg_id FROM users
+               WHERE LOWER(name) LIKE $1 OR LOWER(username) LIKE $1
+                  OR ($2::BIGINT IS NOT NULL AND tg_id = $2::BIGINT)
+               ORDER BY name LIMIT 20""", like, int(digits) if digits else None)
+    return _json([{
+        "id": x["id"], "name": x["name"] or "Без имени",
+        "username": x["username"] or "", "city": x["city"] or "",
+    } for x in rows])
+
+
+async def a_staff(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        rows = await c.fetch(
+            """SELECT s.user_id, s.role, s.is_creator, u.name, u.username, u.city
+               FROM event_staff s JOIN users u ON u.id = s.user_id
+               WHERE s.event_id=$1
+               ORDER BY s.is_creator DESC, s.role, u.name""", eid)
+    return _json([{
+        "user_id": x["user_id"], "role": x["role"], "is_creator": x["is_creator"],
+        "name": x["name"] or "Без имени", "username": x["username"] or "",
+        "city": x["city"] or "",
+    } for x in rows])
+
+
+async def a_staff_save(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+        body = await r.json()
+        uid = int(body["user_id"])
+    except (ValueError, KeyError, TypeError):
+        return _json({"error": "bad_request"}, status=400)
+    role = str(body.get("role") or "")
+    if role not in STAFF_ROLES:
+        return _json({"error": "bad_role"}, status=400)
+    async with db_pool.acquire() as c:
+        if not await c.fetchval("SELECT 1 FROM users WHERE id=$1", uid):
+            return _json({"error": "no_user"}, status=404)
+        await c.execute(
+            """INSERT INTO event_staff (event_id, user_id, role)
+               VALUES ($1,$2,$3)
+               ON CONFLICT (event_id, user_id) DO UPDATE SET role = EXCLUDED.role""",
+            eid, uid, role)
+    logger.info("Админка: %s назначен на событие %s как %s", uid, eid, role)
+    return _json({"ok": True})
+
+
+async def a_staff_delete(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid, uid = int(r.match_info["id"]), int(r.match_info["uid"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        # Держим один инвариант: организатор у события должен остаться хотя бы
+        # один. Запрещать снятие «создателя» было бы строже и бесполезнее —
+        # передать старт его настоящему организатору законная операция,
+        # а is_creator остаётся пометкой «кто заводил», а не замком.
+        row = await c.fetchrow(
+            "SELECT role FROM event_staff WHERE event_id=$1 AND user_id=$2", eid, uid)
+        if not row:
+            return _json({"error": "not_found"}, status=404)
+        if row["role"] == "organizer":
+            left = await c.fetchval(
+                """SELECT COUNT(*) FROM event_staff
+                   WHERE event_id=$1 AND role='organizer' AND user_id<>$2""", eid, uid)
+            if not left:
+                return _json({"error": "last_organizer"}, status=409)
+        await c.execute(
+            "DELETE FROM event_staff WHERE event_id=$1 AND user_id=$2", eid, uid)
+    return _json({"ok": True})
+
+
 async def a_entry_status(r):
     if not _admin_ok(r):
         return _need_admin()
@@ -2226,6 +2364,10 @@ def build_web_app():
     app.router.add_put("/api/admin/events/{id}", a_event_save)
     app.router.add_post("/api/admin/events/{id}/image", a_event_image)
     app.router.add_get("/api/admin/events/{id}/entries", a_entries)
+    app.router.add_get("/api/admin/users", a_users)
+    app.router.add_get("/api/admin/events/{id}/staff", a_staff)
+    app.router.add_post("/api/admin/events/{id}/staff", a_staff_save)
+    app.router.add_delete("/api/admin/events/{id}/staff/{uid}", a_staff_delete)
     app.router.add_post("/api/admin/entries/{id}", a_entry_status)
     app.router.add_post("/api/admin/divisions", a_division_save)
     app.router.add_put("/api/admin/divisions/{id}", a_division_save)
