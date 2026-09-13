@@ -488,12 +488,18 @@
       padding:16px var(--pad); }
     .acc-name { font-size:17px; font-weight:700; letter-spacing:-.02em; }
     .acc-meta { font-size:13px; color:var(--steel); margin-top:3px; }
-    /* Условия выполнения — в рамке: «AMRAP 8 мин» и «крышка 8:00» это регламент,
-       а не подпись к названию. В строке метаданных их читали как украшение. */
-    .acc-terms { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-    .acc-terms span { font-size:12px; font-weight:500; color:var(--chalk);
-      border:1px solid var(--hair); border-radius:7px; padding:5px 9px; line-height:1.2; }
-    .acc-terms span.cap { color:var(--live); border-color:rgba(255,59,48,.35); }
+    /* Условия выполнения — в рамках: «AMRAP 8 мин» и «8:00» это регламент,
+       а не подпись к названию. Формат и время разведены по отдельным блокам
+       с подписями: это два разных вопроса — «что делаем» и «сколько есть».
+       Красным крышку не выделяем: --live значит «идёт сейчас», и на карточке
+       комплекса этот же красный читался как состояние, а не как ограничение. */
+    .acc-terms { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .acc-term { border:1px solid var(--hair); border-radius:9px; padding:7px 11px;
+      min-width:88px; }
+    .acc-term b { display:block; font-size:10px; font-weight:500; color:var(--steel);
+      letter-spacing:.06em; text-transform:uppercase; }
+    .acc-term i { display:block; font-style:normal; font-size:14px; font-weight:600;
+      color:var(--chalk); margin-top:3px; font-variant-numeric:tabular-nums; }
     .acc-body { display:none; padding:0 var(--pad) 18px; }
     .acc.open .acc-body { display:block; }
     .acc.open .acc-chev { transform:rotate(180deg); }
@@ -1556,13 +1562,13 @@
       box.innerHTML = filterBar(ev) + shown.map(w => {
         const meta = [STAGE_LABEL[w.stage] || '', fmtDayLoose(w.day) || '']
           .filter(Boolean).join(' · ');
-        // Тип результата показываем, только если организатор не описал условия
+        // Тип результата показываем, только если организатор не описал формат
         // сам: «На время» рядом с «Время» — это одно и то же дважды.
         const terms = [
-          w.scoring_note ? `<span>${esc(w.scoring_note)}</span>`
-                         : `<span>${esc(RES_LABEL[w.result_type] || w.result_type)}</span>`,
-          w.time_cap ? `<span class="cap">Крышка ${esc(w.time_cap)}</span>` : '',
-        ].filter(Boolean).join('');
+          ['Формат', w.scoring_note || RES_LABEL[w.result_type] || ''],
+          ['Крышка', w.time_cap],
+        ].filter(([, v]) => v).map(([k, v]) =>
+          `<div class="acc-term"><b>${k}</b><i>${esc(v)}</i></div>`).join('');
         const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все категории';
         return `
         <div class="acc" data-id="${w.id}">
@@ -1580,8 +1586,7 @@
           <div class="acc-body">
             ${w.description ? `<div class="acc-desc">${esc(w.description)}</div>`
                             : '<div class="acc-desc" style="color:var(--steel)">Описание не опубликовано.</div>'}
-            <div class="acc-score"><span>${esc(who)}</span><span>${
-              esc(w.scoring_note || RES_LABEL[w.result_type] || '')}</span></div>
+            <div class="acc-score"><span>${esc(who)}</span></div>
           </div>
         </div>`;
       }).join('');
