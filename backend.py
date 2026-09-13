@@ -36,6 +36,8 @@
 
 import os
 import hmac
+import time
+import functools
 import json
 import asyncio
 import base64
@@ -476,6 +478,179 @@ async def h_me(r):
     })
 
 
+# ── Доступ в админку ─────────────────────────────────────────────────
+# Владелец платформы входит паролем и может всё. Организатор входит по своей
+# телеграм-личности и видит только свои события; новости, клубы и партнёры
+# ему не показываются вовсе — это платформа, а не его старт.
+#
+# Блок стоит до хендлеров намеренно: owner_only и event_admin — декораторы,
+# и Python вычисляет их в момент объявления функции.
+
+def _admin_ok(r):
+    """Пароль приходит либо как есть, либо в base64.
+
+    Заголовки HTTP не переносят ничего вне latin-1, а пароль вполне может быть
+    кириллическим: браузер тогда просто не отправит запрос. Поэтому страница
+    шлёт base64, а обычный заголовок оставлен для curl и совместимости.
+    """
+    if not ADMIN_PASSWORD:
+        return False
+    got = r.headers.get("X-Admin-Password", "")
+    if not got:
+        raw = r.headers.get("X-Admin-Password-B64", "")
+        try:
+            got = base64.b64decode(raw, validate=True).decode("utf-8") if raw else ""
+        except Exception:
+            return False
+    # сравниваем байты: compare_digest на строках падает с не-ASCII,
+    # а пароль вполне может быть кириллическим
+    return hmac.compare_digest(got.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
+
+
+def _need_admin():
+    return _json({"error": "forbidden"}, status=403)
+
+
+# ── Кто пришёл в админку ──────────────────────────────────────────────
+# Владелец платформы входит паролем и может всё. Организатор входит по своей
+# телеграм-личности и может только своё событие. Личность у нас уже есть
+# (event_staff.user_id), не хватало транспорта: initData живёт внутри клиента
+# Telegram, а /admin открывается в браузере. Поэтому мини-апп выдаёт
+# короткую подписанную ссылку, страница меняет её на сессионный токен.
+
+LINK_TTL = 600           # ссылка живёт 10 минут: её могут переслать
+SESSION_TTL = 12 * 3600  # сессии хватает, чтобы собрать событие за вечер
+
+
+def _sign(kind, uid, ttl):
+    exp = int(time.time()) + ttl
+    body = f"{kind}.{uid}.{exp}"
+    sig = hmac.new(BOT_TOKEN.encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{body}.{sig}"
+
+
+def _unsign(kind, token):
+    """id пользователя или None. Подпись, тип и срок проверяем все три."""
+    try:
+        k, uid, exp, sig = str(token or "").split(".")
+    except ValueError:
+        return None
+    if k != kind or not BOT_TOKEN:
+        return None
+    body = f"{k}.{uid}.{exp}"
+    want = hmac.new(BOT_TOKEN.encode(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, want):
+        return None
+    try:
+        if int(exp) < time.time():
+            return None
+        return int(uid)
+    except ValueError:
+        return None
+
+
+async def admin_actor(r):
+    """{"owner": True} · {"user_id": N} · None."""
+    if _admin_ok(r):
+        return {"owner": True}
+    uid = _unsign("s", r.headers.get("X-Admin-Token", ""))
+    return {"user_id": uid} if uid else None
+
+
+async def _staff_events(uid):
+    """События, где человек организатор. Судья админку не открывает —
+    его место на площадке с телефоном, и это отдельный экран."""
+    async with db_pool.acquire() as c:
+        rows = await c.fetch(
+            "SELECT event_id FROM event_staff WHERE user_id=$1 AND role='organizer'",
+            uid)
+    return {x["event_id"] for x in rows}
+
+
+def owner_only(fn):
+    """Разделы платформы: новости, клубы, партнёры, поиск людей.
+    Организатору их не показываем — это платформа, а не его старт."""
+    @functools.wraps(fn)
+    async def wrap(r):
+        who = await admin_actor(r)
+        if not who or not who.get("owner"):
+            return _need_admin()
+        return await fn(r)
+    return wrap
+
+
+# откуда взять событие, если в пути лежит id вложенного объекта
+_OWNER_SQL = {
+    "division": "SELECT event_id FROM divisions WHERE id=$1",
+    "wod":      "SELECT event_id FROM wods WHERE id=$1",
+    "heat":     "SELECT event_id FROM heats WHERE id=$1",
+    "schedule": "SELECT event_id FROM schedule WHERE id=$1",
+    "entry":    "SELECT event_id FROM entries WHERE id=$1",
+}
+
+
+async def allow_event(r, eid):
+    """Пускать ли к событию: None — да, иначе готовый отказ.
+
+    Результат проверяют через `is not None`, а не на истинность: `web.Response`
+    в aiohttp — это MutableMapping, и пустой ответ в булевом контексте ложен.
+    На `if deny:` проверка молча пропускала чужого.
+
+    Для хендлеров, которые и создают, и правят: у них событие берётся из разных
+    мест, и обёрткой это не выражается.
+    """
+    who = await admin_actor(r)
+    if not who:
+        return _need_admin()
+    if who.get("owner"):
+        return None
+    if eid is None or eid not in await _staff_events(who["user_id"]):
+        return _need_admin()
+    return None
+
+
+async def _event_of(kind, oid):
+    """Событие, которому принадлежит вложенный объект."""
+    async with db_pool.acquire() as c:
+        return await c.fetchval(_OWNER_SQL[kind], oid)
+
+
+def event_admin(param="id", kind=None):
+    """Хендлер события: владелец может всё, организатор — только своё.
+
+    `kind` указывают там, где в пути лежит id вложенного объекта, а не события:
+    тогда владельца события находим по нему.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrap(r):
+            who = await admin_actor(r)
+            if not who:
+                return _need_admin()
+            if who.get("owner"):
+                return await fn(r)
+            raw = r.match_info.get(param)
+            if raw is None and param == "body":
+                try:
+                    raw = (await r.json()).get("event_id")
+                except Exception:
+                    raw = None
+            try:
+                oid = int(raw)
+            except (TypeError, ValueError):
+                return _json({"error": "bad_id"}, status=404)
+            eid = oid
+            if kind:
+                async with db_pool.acquire() as c:
+                    eid = await c.fetchval(_OWNER_SQL[kind], oid)
+            if eid is None or eid not in await _staff_events(who["user_id"]):
+                return _need_admin()
+            return await fn(r)
+        return wrap
+    return deco
+
+
+
 GENDERS = ("", "М", "Ж")
 
 
@@ -697,10 +872,9 @@ async def import_partner_news(partner):
     return {"added": added, "skipped": skipped}
 
 
+@owner_only
 async def a_news_import(r):
     """Ручной запуск импорта — кнопкой из админки."""
-    if not _admin_ok(r):
-        return _need_admin()
     async with db_pool.acquire() as c:
         p = await c.fetchrow(
             "SELECT * FROM partners WHERE is_active AND channel <> '' ORDER BY id LIMIT 1")
@@ -781,10 +955,9 @@ async def h_partner_logo(r):
     return resp
 
 
+@owner_only
 async def a_partners(r):
     """Партнёры и переходы по размещениям — то, что показывают при продлении."""
-    if not _admin_ok(r):
-        return _need_admin()
     async with db_pool.acquire() as c:
         rows = await c.fetch("SELECT * FROM partners ORDER BY id")
         clicks = await c.fetch("SELECT * FROM partner_clicks")
@@ -801,9 +974,8 @@ async def a_partners(r):
     } for p in rows])
 
 
+@owner_only
 async def a_partner_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
@@ -836,9 +1008,8 @@ async def a_partner_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@owner_only
 async def a_partner_logo(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         pid = int(r.match_info["id"])
         body = await r.json()
@@ -1725,36 +1896,6 @@ async def h_event(r):
     })
 
 
-# ── Админка ──────────────────────────────────────────────────────────
-# Один оператор с паролем. Ролевой доступ «организатор видит только свой
-# старт» лежит в event_staff и включается, когда появятся реальные
-# организаторы: сейчас городить его не на ком.
-
-def _admin_ok(r):
-    """Пароль приходит либо как есть, либо в base64.
-
-    Заголовки HTTP не переносят ничего вне latin-1, а пароль вполне может быть
-    кириллическим: браузер тогда просто не отправит запрос. Поэтому страница
-    шлёт base64, а обычный заголовок оставлен для curl и совместимости.
-    """
-    if not ADMIN_PASSWORD:
-        return False
-    got = r.headers.get("X-Admin-Password", "")
-    if not got:
-        raw = r.headers.get("X-Admin-Password-B64", "")
-        try:
-            got = base64.b64decode(raw, validate=True).decode("utf-8") if raw else ""
-        except Exception:
-            return False
-    # сравниваем байты: compare_digest на строках падает с не-ASCII,
-    # а пароль вполне может быть кириллическим
-    return hmac.compare_digest(got.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
-
-
-def _need_admin():
-    return _json({"error": "forbidden"}, status=403)
-
-
 _TRANSLIT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
     "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
@@ -1794,16 +1935,57 @@ GENDER_RULES = ("any", "male", "female", "mixed")
 LEVELS = ("", "bg", "inter", "rx", "elite")
 
 
+async def h_admin_link(r):
+    """Ссылка в админку для организатора. Зовётся из мини-аппа, где Telegram
+    уже сказал, кто пришёл, — пароля здесь нет и быть не должно."""
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    if not await _staff_events(u["id"]):
+        return _json({"error": "not_organizer"}, status=403)
+    base = (WEBAPP_URL or "").rstrip("/")
+    return _json({"url": f"{base}/admin#t={_sign('l', u['id'], LINK_TTL)}"})
+
+
+async def h_admin_session(r):
+    """Обмен ссылки на сессию. Ссылку могут переслать, поэтому она живёт
+    минуты; сессия дальше своя и в адресной строке не висит."""
+    try:
+        token = (await r.json()).get("token")
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    uid = _unsign("l", token)
+    if not uid:
+        return _json({"error": "bad_token"}, status=403)
+    events = await _staff_events(uid)
+    if not events:
+        return _json({"error": "not_organizer"}, status=403)
+    async with db_pool.acquire() as c:
+        name = await c.fetchval("SELECT name FROM users WHERE id=$1", uid)
+    logger.info("Админка: вход организатора %s (%s)", uid, name)
+    return _json({"token": _sign("s", uid, SESSION_TTL), "name": name or "Организатор",
+                  "events": sorted(events)})
+
+
 async def a_check(r):
-    if not _admin_ok(r):
+    """Проба доступа: заодно говорит странице, кто вошёл."""
+    who = await admin_actor(r)
+    if not who:
         return _need_admin()
-    return _json({"ok": True, "db": db_pool is not None})
+    if who.get("owner"):
+        return _json({"ok": True, "role": "owner", "db": db_pool is not None})
+    async with db_pool.acquire() as c:
+        name = await c.fetchval("SELECT name FROM users WHERE id=$1", who["user_id"])
+    return _json({"ok": True, "role": "organizer", "name": name or "Организатор",
+                  "db": db_pool is not None})
 
 
 async def a_events(r):
-    """Все события, включая черновики и скрытые: это рабочий список оператора."""
-    if not _admin_ok(r):
+    """Рабочий список: у владельца все события, у организатора только свои."""
+    who = await admin_actor(r)
+    if not who:
         return _need_admin()
+    mine = None if who.get("owner") else sorted(await _staff_events(who["user_id"]))
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT e.id, e.slug, e.title, e.city, e.status, e.visibility,
@@ -1811,7 +1993,9 @@ async def a_events(r):
                       (SELECT COUNT(*) FROM divisions d WHERE d.event_id=e.id) AS divisions,
                       (SELECT COUNT(*) FROM entries en
                         WHERE en.event_id=e.id AND en.status='active')          AS entries
-               FROM events e ORDER BY e.date_start DESC NULLS LAST, e.id DESC""")
+               FROM events e
+               WHERE $1::int[] IS NULL OR e.id = ANY($1::int[])
+               ORDER BY e.date_start DESC NULLS LAST, e.id DESC""", mine)
     return _json([{
         "id": x["id"], "slug": x["slug"], "title": x["title"], "city": x["city"],
         "status": x["status"], "visibility": x["visibility"],
@@ -1828,14 +2012,20 @@ EVENT_DATES = ("date_start", "date_end", "reg_opens_at", "reg_closes_at",
 
 
 async def a_event_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
         return _json({"error": "bad_json"}, status=400)
 
     eid = r.match_info.get("id")
+    # Заводит события платформа, а не организатор: попадание старта в каталог —
+    # её решение. Править своё событие организатор может.
+    if eid:
+        deny = await allow_event(r, int(eid) if str(eid).isdigit() else None)
+        if deny:
+            return deny
+    elif not (await admin_actor(r) or {}).get("owner"):
+        return _need_admin()
     title = _clean(body.get("title"), 200)
     if len(title) < 2:
         return _json({"error": "invalid", "fields": {"title": "Нужно название"}}, status=400)
@@ -1905,9 +2095,8 @@ async def a_event_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@event_admin("id")
 async def a_event_one(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -1952,10 +2141,9 @@ async def a_event_one(r):
     return _json(out)
 
 
+@event_admin("id")
 async def a_event_image(r):
     """Афиша и знак. Браузер уже ужал картинку, поэтому принимаем dataURL."""
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
         body = await r.json()
@@ -1985,9 +2173,8 @@ async def a_event_image(r):
 DIV_NUMS = ("team_size", "price", "ord")
 
 
+@event_admin("id", "division")
 async def a_division_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
@@ -2038,10 +2225,9 @@ async def a_division_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@event_admin("id", "division")
 async def a_division_delete(r):
     """Удаляем только пустой дивизион: с заявками это потеря данных."""
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         did = int(r.match_info["id"])
     except ValueError:
@@ -2055,9 +2241,8 @@ async def a_division_delete(r):
     return _json({"ok": True})
 
 
+@event_admin("id")
 async def a_entries(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -2119,14 +2304,13 @@ async def require_staff(r, event_id, roles=STAFF_ROLES):
     return u, role
 
 
+@owner_only
 async def a_users(r):
     """Поиск человека для назначения: по имени, username или tg_id.
 
     Назначить можно только того, кто уже открывал приложение, — до этого
     строки в `users` нет и связывать роль не с чем.
     """
-    if not _admin_ok(r):
-        return _need_admin()
     q = _clean(r.query.get("q"), 80)
     if len(q) < 2:
         return _json([])
@@ -2144,9 +2328,8 @@ async def a_users(r):
     } for x in rows])
 
 
+@event_admin("id")
 async def a_staff(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -2164,9 +2347,8 @@ async def a_staff(r):
     } for x in rows])
 
 
+@event_admin("id")
 async def a_staff_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
         body = await r.json()
@@ -2190,9 +2372,8 @@ async def a_staff_save(r):
     return _json({"ok": True})
 
 
+@event_admin("id")
 async def a_staff_delete(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid, uid = int(r.match_info["id"]), int(r.match_info["uid"])
     except ValueError:
@@ -2235,9 +2416,8 @@ def _wod_out(w, div_ids):
     }
 
 
+@event_admin("id")
 async def a_wods(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -2255,12 +2435,16 @@ async def a_wods(r):
 
 
 async def a_wod_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
         return _json({"error": "bad_json"}, status=400)
+    oid = r.match_info.get("wid")
+    deny = await allow_event(r, await _event_of("wod", int(oid)) if oid
+                             else int(r.match_info["id"]) if r.match_info.get("id")
+                             else None)
+    if deny is not None:
+        return deny
     wid = r.match_info.get("wid")
     name = _clean(body.get("name"), 120)
     if len(name) < 2:
@@ -2320,9 +2504,8 @@ async def a_wod_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@event_admin("wid", "wod")
 async def a_wod_delete(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         wid = int(r.match_info["wid"])
     except ValueError:
@@ -2335,10 +2518,9 @@ async def a_wod_delete(r):
     return _json({"ok": True})
 
 
+@event_admin("id")
 async def a_results(r):
     """Сетка ввода: заявки дивизиона × комплексы, с баллами и местами."""
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
         did = int(r.query.get("division", ""))
@@ -2367,13 +2549,15 @@ async def a_results(r):
 
 async def a_result_save(r):
     """Одна ячейка сетки. Пустое значение без статуса — стереть результат."""
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
         entry_id, wod_id = int(body["entry_id"]), int(body["wod_id"])
     except (Exception, KeyError):
         return _json({"error": "bad_request"}, status=400)
+    # событие в пути не лежит — берём его у заявки, которой ставим результат
+    deny = await allow_event(r, await _event_of("entry", entry_id))
+    if deny is not None:
+        return deny
     status = str(body.get("status") or "ok")
     if status not in ("ok", "dnf", "dns", "cap"):
         return _json({"error": "bad_status"}, status=400)
@@ -2413,9 +2597,8 @@ async def a_result_save(r):
 
 # ── Турнир: заходы и расписание ───────────────────────────────────────
 
+@event_admin("id")
 async def a_heats(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -2456,12 +2639,16 @@ async def a_heats(r):
 
 
 async def a_heat_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
         return _json({"error": "bad_json"}, status=400)
+    oid = r.match_info.get("hid")
+    deny = await allow_event(r, await _event_of("heat", int(oid)) if oid
+                             else int(r.match_info["id"]) if r.match_info.get("id")
+                             else None)
+    if deny is not None:
+        return deny
     hid = r.match_info.get("hid")
     try:
         day = _date(body.get("day"))
@@ -2513,9 +2700,8 @@ async def a_heat_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@event_admin("hid", "heat")
 async def a_heat_delete(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         hid = int(r.match_info["hid"])
     except ValueError:
@@ -2525,14 +2711,13 @@ async def a_heat_delete(r):
     return _json({"ok": True})
 
 
+@event_admin("id")
 async def a_heat_fill(r):
     """Разбить категорию по заходам: дорожек на заход задаёт оператор.
 
     Руками это пять часов работы на турнир по нашей же оценке в оффере
     организатору, поэтому кнопка есть, а расстановку потом можно править.
     """
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
         body = await r.json()
@@ -2567,9 +2752,8 @@ async def a_heat_fill(r):
     return _json({"ok": True, "heats": made, "entries": len(entries)})
 
 
+@event_admin("id")
 async def a_schedule(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         eid = int(r.match_info["id"])
     except ValueError:
@@ -2587,12 +2771,16 @@ async def a_schedule(r):
 
 
 async def a_sched_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
         return _json({"error": "bad_json"}, status=400)
+    oid = r.match_info.get("sid")
+    deny = await allow_event(r, await _event_of("schedule", int(oid)) if oid
+                             else int(r.match_info["id"]) if r.match_info.get("id")
+                             else None)
+    if deny is not None:
+        return deny
     sid = r.match_info.get("sid")
     title = _clean(body.get("title"), 200)
     if len(title) < 2:
@@ -2622,9 +2810,8 @@ async def a_sched_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@event_admin("sid", "schedule")
 async def a_sched_delete(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         sid = int(r.match_info["sid"])
     except ValueError:
@@ -2634,12 +2821,11 @@ async def a_sched_delete(r):
     return _json({"ok": True})
 
 
+@event_admin("id", "entry")
 async def a_entry_payment(r):
     """Отметка оплаты. Деньги идут мимо платформы, поэтому это ровно то,
     что организатор увидел у себя на счету, и ничего больше.
     """
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         enid = int(r.match_info["id"])
         body = await r.json()
@@ -2655,9 +2841,8 @@ async def a_entry_payment(r):
     return _json({"ok": True})
 
 
+@event_admin("id", "entry")
 async def a_entry_status(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         enid = int(r.match_info["id"])
         body = await r.json()
@@ -2680,9 +2865,8 @@ async def a_entry_status(r):
     return _json({"ok": True})
 
 
+@owner_only
 async def a_news_list(r):
-    if not _admin_ok(r):
-        return _need_admin()
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT id, title, summary, source_url, is_featured, image_v,
@@ -2698,9 +2882,8 @@ async def a_news_list(r):
     } for x in rows])
 
 
+@owner_only
 async def a_news_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
@@ -2743,9 +2926,8 @@ async def a_news_save(r):
     return _json({"ok": True, "id": new_id})
 
 
+@owner_only
 async def a_news_image(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         nid = int(r.match_info["id"])
         body = await r.json()
@@ -2768,10 +2950,9 @@ async def a_news_image(r):
 NEWS_STATUSES = ("published", "draft", "rejected")
 
 
+@owner_only
 async def a_news_status(r):
     """Публикация или отклонение черновика."""
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         nid = int(r.match_info["id"])
         body = await r.json()
@@ -2788,9 +2969,8 @@ async def a_news_status(r):
     return _json({"ok": True})
 
 
+@owner_only
 async def a_news_delete(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         nid = int(r.match_info["id"])
     except ValueError:
@@ -2800,9 +2980,8 @@ async def a_news_delete(r):
     return _json({"ok": True})
 
 
+@owner_only
 async def a_clubs(r):
-    if not _admin_ok(r):
-        return _need_admin()
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT c.id, c.name, c.city, c.is_active,
@@ -2811,9 +2990,8 @@ async def a_clubs(r):
     return _json([dict(x) for x in rows])
 
 
+@owner_only
 async def a_club_save(r):
-    if not _admin_ok(r):
-        return _need_admin()
     try:
         body = await r.json()
     except Exception:
@@ -2886,6 +3064,8 @@ def build_web_app():
     app.router.add_get("/api/events/{id}/heats", h_event_heats)
 
     app.router.add_get("/admin", h_admin)
+    app.router.add_post("/api/admin/link", h_admin_link)
+    app.router.add_post("/api/admin/session", h_admin_session)
     app.router.add_get("/api/admin/check", a_check)
     app.router.add_get("/api/admin/events", a_events)
     app.router.add_post("/api/admin/events", a_event_save)
