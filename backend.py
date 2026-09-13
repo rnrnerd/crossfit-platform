@@ -2334,6 +2334,229 @@ async def a_result_save(r):
     return _json({"ok": True})
 
 
+# ── Турнир: заходы и расписание ───────────────────────────────────────
+
+async def a_heats(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        heats = await c.fetch(
+            """SELECT h.*, w.name AS wod_name FROM heats h
+               LEFT JOIN wods w ON w.id = h.wod_id
+               WHERE h.event_id=$1 ORDER BY h.day NULLS LAST, h.start_time, h.number""", eid)
+        lanes = await c.fetch(
+            """SELECT he.heat_id, he.entry_id, he.lane, d.name AS division,
+                      ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
+                      en.team_name
+               FROM heat_entries he
+               JOIN heats h ON h.id = he.heat_id
+               JOIN entries en ON en.id = he.entry_id
+               JOIN divisions d ON d.id = en.division_id
+               JOIN entry_members m ON m.entry_id = en.id
+               JOIN users u ON u.id = m.user_id
+               WHERE h.event_id=$1
+               GROUP BY he.heat_id, he.entry_id, he.lane, d.name, en.team_name
+               ORDER BY he.lane""", eid)
+    by_heat = {}
+    for x in lanes:
+        members = list(x["members"] or [])
+        by_heat.setdefault(x["heat_id"], []).append({
+            "entry_id": x["entry_id"], "lane": x["lane"],
+            "name": x["team_name"] or (members[0] if members else "Без имени"),
+            "division": x["division"],
+        })
+    return _json([{
+        "id": h["id"], "wod_id": h["wod_id"], "wod_name": h["wod_name"] or "",
+        "number": h["number"], "day": str(h["day"] or ""),
+        "briefing_start": h["briefing_start"], "briefing_end": h["briefing_end"],
+        "start_time": h["start_time"], "location": h["location"],
+        "lanes": by_heat.get(h["id"], []),
+    } for h in heats])
+
+
+async def a_heat_save(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_json"}, status=400)
+    hid = r.match_info.get("hid")
+    try:
+        day = _date(body.get("day"))
+    except ValueError as e:
+        return _json({"error": "invalid", "fields": {"day": str(e)}}, status=400)
+    try:
+        number = max(1, min(999, int(body.get("number") or 1)))
+    except (TypeError, ValueError):
+        number = 1
+    wod_id = body.get("wod_id")
+    wod_id = int(wod_id) if str(wod_id or "").isdigit() else None
+    vals = (wod_id, number, day, _clean(body.get("briefing_start"), 10),
+            _clean(body.get("briefing_end"), 10), _clean(body.get("start_time"), 10),
+            _clean(body.get("location"), 80))
+    # дорожки: [{entry_id, lane}] — состав переписываем целиком, так проще
+    lanes = []
+    for x in (body.get("lanes") or []):
+        try:
+            lanes.append((int(x["entry_id"]), max(0, min(99, int(x.get("lane") or 0)))))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    async with db_pool.acquire() as c:
+        if hid:
+            row = await c.fetchrow(
+                """UPDATE heats SET wod_id=$2, number=$3, day=$4, briefing_start=$5,
+                        briefing_end=$6, start_time=$7, location=$8
+                   WHERE id=$1 RETURNING id, event_id""", int(hid), *vals)
+            if not row:
+                return _json({"error": "not_found"}, status=404)
+            new_id, eid = row["id"], row["event_id"]
+        else:
+            try:
+                eid = int(r.match_info["id"])
+            except ValueError:
+                return _json({"error": "bad_id"}, status=404)
+            new_id = await c.fetchval(
+                """INSERT INTO heats (event_id, wod_id, number, day, briefing_start,
+                        briefing_end, start_time, location)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""", eid, *vals)
+        await c.execute("DELETE FROM heat_entries WHERE heat_id=$1", new_id)
+        if lanes:
+            await c.executemany(
+                """INSERT INTO heat_entries (heat_id, entry_id, lane)
+                   SELECT $1, $2, $3 WHERE EXISTS
+                       (SELECT 1 FROM entries WHERE id=$2 AND event_id=$4)
+                   ON CONFLICT (heat_id, entry_id) DO UPDATE SET lane = EXCLUDED.lane""",
+                [(new_id, e, ln, eid) for e, ln in lanes])
+    return _json({"ok": True, "id": new_id})
+
+
+async def a_heat_delete(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        hid = int(r.match_info["hid"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        await c.execute("DELETE FROM heats WHERE id=$1", hid)
+    return _json({"ok": True})
+
+
+async def a_heat_fill(r):
+    """Разбить категорию по заходам: дорожек на заход задаёт оператор.
+
+    Руками это пять часов работы на турнир по нашей же оценке в оффере
+    организатору, поэтому кнопка есть, а расстановку потом можно править.
+    """
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+        body = await r.json()
+        did, wid = int(body["division_id"]), int(body["wod_id"])
+        per = max(2, min(40, int(body.get("lanes") or 8)))
+    except (Exception, KeyError):
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        entries = await c.fetch(
+            """SELECT en.id FROM entries en
+               JOIN entry_members m ON m.entry_id = en.id
+               JOIN users u ON u.id = m.user_id
+               WHERE en.division_id=$1 AND en.event_id=$2 AND en.status='active'
+               GROUP BY en.id, en.team_name
+               ORDER BY MIN(u.name)""", did, eid)
+        if not entries:
+            return _json({"error": "no_entries"}, status=409)
+        day = await c.fetchval("SELECT day FROM wods WHERE id=$1 AND event_id=$2", wid, eid)
+        start = await c.fetchval(
+            "SELECT COALESCE(MAX(number), 0) FROM heats WHERE event_id=$1 AND wod_id=$2",
+            eid, wid)
+        made = 0
+        for i in range(0, len(entries), per):
+            chunk = entries[i:i + per]
+            hid = await c.fetchval(
+                """INSERT INTO heats (event_id, wod_id, number, day)
+                   VALUES ($1,$2,$3,$4) RETURNING id""", eid, wid, start + made + 1, day)
+            await c.executemany(
+                "INSERT INTO heat_entries (heat_id, entry_id, lane) VALUES ($1,$2,$3)",
+                [(hid, e["id"], n + 1) for n, e in enumerate(chunk)])
+            made += 1
+    return _json({"ok": True, "heats": made, "entries": len(entries)})
+
+
+async def a_schedule(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        rows = await c.fetch(
+            """SELECT s.*, d.name AS division FROM schedule s
+               LEFT JOIN divisions d ON d.id = s.division_id
+               WHERE s.event_id=$1 ORDER BY s.day NULLS LAST, s.time, s.id""", eid)
+    return _json([{
+        "id": x["id"], "day": str(x["day"] or ""), "time": x["time"],
+        "title": x["title"], "location": x["location"],
+        "division_id": x["division_id"], "division": x["division"] or "",
+    } for x in rows])
+
+
+async def a_sched_save(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_json"}, status=400)
+    sid = r.match_info.get("sid")
+    title = _clean(body.get("title"), 200)
+    if len(title) < 2:
+        return _json({"error": "invalid", "fields": {"title": "Нужно название"}}, status=400)
+    try:
+        day = _date(body.get("day"))
+    except ValueError as e:
+        return _json({"error": "invalid", "fields": {"day": str(e)}}, status=400)
+    div = body.get("division_id")
+    div = int(div) if str(div or "").isdigit() else None
+    vals = (day, _clean(body.get("time"), 10), title, _clean(body.get("location"), 80), div)
+    async with db_pool.acquire() as c:
+        if sid:
+            row = await c.fetchrow(
+                """UPDATE schedule SET day=$2, time=$3, title=$4, location=$5,
+                        division_id=$6 WHERE id=$1 RETURNING id""", int(sid), *vals)
+            if not row:
+                return _json({"error": "not_found"}, status=404)
+            return _json({"ok": True, "id": row["id"]})
+        try:
+            eid = int(r.match_info["id"])
+        except ValueError:
+            return _json({"error": "bad_id"}, status=404)
+        new_id = await c.fetchval(
+            """INSERT INTO schedule (event_id, day, time, title, location, division_id)
+               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""", eid, *vals)
+    return _json({"ok": True, "id": new_id})
+
+
+async def a_sched_delete(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        sid = int(r.match_info["sid"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        await c.execute("DELETE FROM schedule WHERE id=$1", sid)
+    return _json({"ok": True})
+
+
 async def a_entry_status(r):
     if not _admin_ok(r):
         return _need_admin()
@@ -2574,6 +2797,15 @@ def build_web_app():
     app.router.add_delete("/api/admin/wods/{wid}", a_wod_delete)
     app.router.add_get("/api/admin/events/{id}/results", a_results)
     app.router.add_post("/api/admin/results", a_result_save)
+    app.router.add_get("/api/admin/events/{id}/heats", a_heats)
+    app.router.add_post("/api/admin/events/{id}/heats", a_heat_save)
+    app.router.add_post("/api/admin/events/{id}/heats-fill", a_heat_fill)
+    app.router.add_put("/api/admin/heats/{hid}", a_heat_save)
+    app.router.add_delete("/api/admin/heats/{hid}", a_heat_delete)
+    app.router.add_get("/api/admin/events/{id}/schedule", a_schedule)
+    app.router.add_post("/api/admin/events/{id}/schedule", a_sched_save)
+    app.router.add_put("/api/admin/schedule/{sid}", a_sched_save)
+    app.router.add_delete("/api/admin/schedule/{sid}", a_sched_delete)
     app.router.add_get("/api/admin/events/{id}/staff", a_staff)
     app.router.add_post("/api/admin/events/{id}/staff", a_staff_save)
     app.router.add_delete("/api/admin/events/{id}/staff/{uid}", a_staff_delete)

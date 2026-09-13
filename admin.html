@@ -93,6 +93,9 @@
     .chk { display:inline-flex; align-items:center; gap:7px; background:var(--plate2);
       border-radius:8px; padding:8px 11px; font-size:14px; cursor:pointer; }
     .chk input { accent-color:var(--accent); }
+    .row-lane { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+    .row-lane .ln { width:74px; }
+    .row-lane .le { flex:1; max-width:460px; }
 
     /* .tag используется и как метка, и как кнопка фильтра заявок */
     button.tag { border:none; cursor:pointer; font:inherit; font-size:11px;
@@ -305,7 +308,8 @@
       <input id="${id}" type="${type}" value="${esc(val ?? '')}" ${extra} /></div>`;
 
   const EV_TABS = [['set', 'Настройки'], ['div', 'Категории'], ['wod', 'Комплексы'],
-                   ['res', 'Результаты'], ['ent', 'Заявки'], ['stf', 'Судьи']];
+                   ['hea', 'Заходы'], ['sch', 'Расписание'], ['res', 'Результаты'],
+                   ['ent', 'Заявки'], ['stf', 'Судьи']];
 
   async function editEvent(id, pane = 'set') {
     const m = $('main');
@@ -392,6 +396,20 @@
         <div id="wods"><div class="note">Загрузка…</div></div>
       </div>
 
+      <div class="epane" id="p-hea"${pane === 'hea' ? '' : ' hidden'}>
+        <div class="row-between">
+          <h2>Заходы</h2><button class="btn quiet" id="new-heat">Добавить</button>
+        </div>
+        <div id="heats"><div class="note">Загрузка…</div></div>
+      </div>
+
+      <div class="epane" id="p-sch"${pane === 'sch' ? '' : ' hidden'}>
+        <div class="row-between">
+          <h2>Расписание</h2><button class="btn quiet" id="new-sched">Добавить</button>
+        </div>
+        <div id="sched"><div class="note">Загрузка…</div></div>
+      </div>
+
       <div class="epane" id="p-res"${pane === 'res' ? '' : ' hidden'}>
         <h2>Результаты</h2>
         <div id="results"><div class="note">Загрузка…</div></div>
@@ -414,6 +432,8 @@
     $('up-mark').onclick = () => uploadEventImage(id, 'mark', 512, 512);
     $('new-div').onclick = () => divRow(id, null);
     $('new-wod').onclick = () => wodForm(id, ev.divisions, null);
+    $('new-heat').onclick = () => heatForm(id, ev.divisions, null);
+    $('new-sched').onclick = () => schedForm(id, ev.divisions, null);
 
     // данные вкладки тянем при первом открытии, а не все сразу: сетка
     // результатов на сотню заявок не нужна тому, кто зашёл поправить дату
@@ -425,6 +445,8 @@
       loaded[k] = true;
       if (k === 'div') renderDivs(id, ev.divisions, !!ev.feed_url);
       if (k === 'wod') loadWods(id, ev.divisions);
+      if (k === 'hea') loadHeats(id, ev.divisions);
+      if (k === 'sch') loadSchedule(id, ev.divisions);
       if (k === 'res') loadResults(id, ev.divisions);
       if (k === 'ent') loadEntries(id);
       if (k === 'stf') loadStaff(id);
@@ -663,6 +685,215 @@
       }
       toast('Сохранено');
       loadWods(eid, divs);
+    };
+  }
+
+  // ── Заходы ──
+  let evEntries = null;                       // заявки события для выбора дорожек
+
+  async function entriesOf(eid) {
+    if (!evEntries) evEntries = await api(`/api/admin/events/${eid}/entries`);
+    return Array.isArray(evEntries) ? evEntries.filter(x => x.status === 'active') : [];
+  }
+
+  async function loadHeats(eid, divs) {
+    const box = $('heats');
+    const [list, wods] = await Promise.all([
+      api(`/api/admin/events/${eid}/heats`),
+      api(`/api/admin/events/${eid}/wods`),
+    ]);
+    if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+
+    const fill = `
+      <div class="grid" style="margin-bottom:18px">
+        <div class="f"><label for="hf-div">Разбить по заходам</label>
+          <select id="hf-div">${divs.map(d =>
+            `<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>
+        <div class="f"><label for="hf-wod">Комплекс</label>
+          <select id="hf-wod">${(wods || []).map(w =>
+            `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></div>
+        <div class="f"><label for="hf-lanes">Дорожек в заходе</label>
+          <input id="hf-lanes" type="number" value="8" min="2" max="40"></div>
+        <div class="f"><label>&nbsp;</label>
+          <button class="btn quiet" id="hf-go">Создать заходы</button></div>
+      </div>`;
+
+    box.innerHTML = (wods && wods.length ? fill : '') + (list.length ? `<table>
+      <tr><th>Комплекс</th><th>№</th><th>День</th><th>Брифинг</th><th>Старт</th>
+          <th>Площадка</th><th>Состав</th><th></th></tr>
+      ${list.map(h => `
+        <tr class="click" data-h="${h.id}">
+          <td><b>${esc(h.wod_name || '—')}</b></td>
+          <td class="num">${h.number}</td>
+          <td>${esc(h.day.slice(0, 10) || '—')}</td>
+          <td>${esc([h.briefing_start, h.briefing_end].filter(Boolean).join('–') || '—')}</td>
+          <td>${esc(h.start_time || '—')}</td>
+          <td>${esc(h.location || '—')}</td>
+          <td>${h.lanes.length ? h.lanes.length + ' чел.' : '<span class="muted">пусто</span>'}</td>
+          <td><button class="btn link danger" data-del="${h.id}">Удалить</button></td>
+        </tr>`).join('')}
+    </table>` : '<div class="note">Заходов нет.</div>');
+
+    if (wods && wods.length) $('hf-go').onclick = async () => {
+      const res = await send(`/api/admin/events/${eid}/heats-fill`, 'POST', {
+        division_id: +$('hf-div').value, wod_id: +$('hf-wod').value,
+        lanes: +$('hf-lanes').value,
+      });
+      if (res.error === 'no_entries') { toast('В этой категории нет заявок'); return; }
+      if (res.error) { toast('Не получилось'); return; }
+      toast(`Создано заходов: ${res.heats} на ${res.entries} заявок`);
+      loadHeats(eid, divs);
+    };
+    box.querySelectorAll('[data-h]').forEach(tr => tr.onclick = e => {
+      if (e.target.dataset.del) return;
+      heatForm(eid, divs, list.find(x => x.id === +tr.dataset.h), wods);
+    });
+    box.querySelectorAll('[data-del]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (!confirm('Удалить заход?')) return;
+      if ((await send('/api/admin/heats/' + b.dataset.del, 'DELETE')).error) {
+        toast('Не получилось'); return;
+      }
+      toast('Заход удалён'); loadHeats(eid, divs);
+    });
+  }
+
+  async function heatForm(eid, divs, h, wods) {
+    wods = wods || await api(`/api/admin/events/${eid}/wods`) || [];
+    const ents = await entriesOf(eid);
+    h = h || {wod_id: null, number: 1, day: '', briefing_start: '', briefing_end: '',
+              start_time: '', location: '', lanes: []};
+    const box = $('heats');
+    const opts = ents.map(e => `<option value="${e.id}">${
+      esc((e.team_name || e.members[0] || '—') + ' · ' + e.division)}</option>`).join('');
+    const laneRow = (lane, entry) => `
+      <div class="row-lane">
+        <input type="number" class="ln" value="${lane}" min="0" max="99">
+        <select class="le">${opts}</select>
+        <button class="btn link danger" data-rm="1">Убрать</button>
+      </div>`;
+
+    box.innerHTML = `
+      <div class="row-between">
+        <h2>${h.id ? 'Заход' : 'Новый заход'}</h2>
+        <button class="btn quiet" id="h-back">Назад</button>
+      </div>
+      <div class="grid">
+        <div class="f"><label for="h-wod">Комплекс</label><select id="h-wod">
+          <option value="">—</option>
+          ${wods.map(w => `<option value="${w.id}"${
+            h.wod_id === w.id ? ' selected' : ''}>${esc(w.name)}</option>`).join('')}
+        </select></div>
+        ${F('h-num', '№ захода', h.number, 'number')}
+        ${F('h-day', 'День', (h.day || '').slice(0, 10), 'date')}
+        ${F('h-bs', 'Брифинг с', h.briefing_start, 'text', 'placeholder="09:40"')}
+        ${F('h-be', 'Брифинг по', h.briefing_end, 'text', 'placeholder="09:55"')}
+        ${F('h-st', 'Старт', h.start_time, 'text', 'placeholder="10:00"')}
+        ${F('h-loc', 'Площадка', h.location)}
+        <div class="f wide"><label>Состав по дорожкам</label>
+          <div id="h-lanes">${h.lanes.map(l => laneRow(l.lane, l.entry_id)).join('')}</div>
+          <div class="bar"><button class="btn quiet" id="h-add">Добавить дорожку</button></div>
+        </div>
+      </div>
+      <div class="bar"><button class="btn" id="h-save">Сохранить</button></div>`;
+
+    // селекты заполняем после вставки: value у option ставится только так
+    [...box.querySelectorAll('#h-lanes .row-lane')].forEach((row, i) => {
+      row.querySelector('.le').value = h.lanes[i].entry_id;
+    });
+    const wire = row => row.querySelector('[data-rm]').onclick = () => row.remove();
+    box.querySelectorAll('.row-lane').forEach(wire);
+    $('h-add').onclick = () => {
+      const n = box.querySelectorAll('.row-lane').length + 1;
+      $('h-lanes').insertAdjacentHTML('beforeend', laneRow(n, null));
+      wire($('h-lanes').lastElementChild);
+    };
+    $('h-back').onclick = () => loadHeats(eid, divs);
+    $('h-save').onclick = async () => {
+      const lanes = [...box.querySelectorAll('.row-lane')].map(r => ({
+        lane: +r.querySelector('.ln').value, entry_id: +r.querySelector('.le').value,
+      })).filter(x => x.entry_id);
+      const body = {
+        wod_id: $('h-wod').value, number: $('h-num').value, day: $('h-day').value,
+        briefing_start: $('h-bs').value, briefing_end: $('h-be').value,
+        start_time: $('h-st').value, location: $('h-loc').value, lanes,
+      };
+      const res = h.id ? await send('/api/admin/heats/' + h.id, 'PUT', body)
+                       : await send(`/api/admin/events/${eid}/heats`, 'POST', body);
+      if (res.error) { toast('Не сохранилось'); return; }
+      toast('Сохранено'); loadHeats(eid, divs);
+    };
+  }
+
+  // ── Расписание ──
+  async function loadSchedule(eid, divs) {
+    const box = $('sched');
+    const list = await api(`/api/admin/events/${eid}/schedule`);
+    if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    box.innerHTML = list.length ? `<table>
+      <tr><th>День</th><th>Время</th><th>Событие</th><th>Площадка</th><th>Категория</th><th></th></tr>
+      ${list.map(x => `
+        <tr class="click" data-s="${x.id}">
+          <td>${esc(x.day.slice(0, 10) || '—')}</td>
+          <td class="num">${esc(x.time || '—')}</td>
+          <td><b>${esc(x.title)}</b></td>
+          <td>${esc(x.location || '—')}</td>
+          <td>${x.division ? esc(x.division) : '<span class="tag off">все</span>'}</td>
+          <td><button class="btn link danger" data-del="${x.id}">Удалить</button></td>
+        </tr>`).join('')}
+    </table>` : '<div class="note">Расписание пустое.</div>';
+    box.querySelectorAll('[data-s]').forEach(tr => tr.onclick = e => {
+      if (e.target.dataset.del) return;
+      schedForm(eid, divs, list.find(x => x.id === +tr.dataset.s));
+    });
+    box.querySelectorAll('[data-del]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (!confirm('Удалить строку расписания?')) return;
+      if ((await send('/api/admin/schedule/' + b.dataset.del, 'DELETE')).error) {
+        toast('Не получилось'); return;
+      }
+      toast('Удалено'); loadSchedule(eid, divs);
+    });
+  }
+
+  function schedForm(eid, divs, x) {
+    x = x || {day: '', time: '', title: '', location: '', division_id: null};
+    const box = $('sched');
+    box.innerHTML = `
+      <div class="row-between">
+        <h2>${x.id ? 'Строка расписания' : 'Новая строка'}</h2>
+        <button class="btn quiet" id="s-back">Назад</button>
+      </div>
+      <div class="grid">
+        ${F('s-day', 'День', (x.day || '').slice(0, 10), 'date')}
+        ${F('s-time', 'Время', x.time, 'text', 'placeholder="09:00"')}
+        ${F('s-title', 'Событие', x.title)}
+        ${F('s-loc', 'Площадка', x.location)}
+        <div class="f"><label for="s-div">Категория</label><select id="s-div">
+          <option value="">— все</option>
+          ${divs.map(d => `<option value="${d.id}"${
+            x.division_id === d.id ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}
+        </select></div>
+      </div>
+      <div class="muted">Общие пункты — регистрация, перерыв, награждение — оставляйте
+        без категории.</div>
+      <div class="err" id="s-err" hidden></div>
+      <div class="bar"><button class="btn" id="s-save">Сохранить</button></div>`;
+    $('s-back').onclick = () => loadSchedule(eid, divs);
+    $('s-save').onclick = async () => {
+      const body = {
+        day: $('s-day').value, time: $('s-time').value, title: $('s-title').value,
+        location: $('s-loc').value, division_id: $('s-div').value,
+      };
+      const res = x.id ? await send('/api/admin/schedule/' + x.id, 'PUT', body)
+                       : await send(`/api/admin/events/${eid}/schedule`, 'POST', body);
+      if (res.error) {
+        const err = $('s-err');
+        err.textContent = Object.values(res.fields || {})[0] || 'Не сохранилось';
+        err.hidden = false;
+        return;
+      }
+      toast('Сохранено'); loadSchedule(eid, divs);
     };
   }
 
