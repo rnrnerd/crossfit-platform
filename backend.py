@@ -239,6 +239,9 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS mark_v INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weight_kg REAL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id INTEGER REFERENCES clubs(id);
+-- Scaled переименован в Intermediate: «скейл» читается как «упрощённый»,
+-- а это средний уровень, а не уценённый. Идемпотентно — гоняется каждый старт.
+UPDATE divisions SET level = 'inter' WHERE level = 'sc';
 
 -- Заявка: участник соревнования (один атлет или команда)
 CREATE TABLE IF NOT EXISTS entries (
@@ -1726,7 +1729,7 @@ def _date(v):
 EVENT_STATUSES = ("draft", "registration", "live", "finished")
 NEWS_CATEGORIES = ("", "ru", "world")
 GENDER_RULES = ("any", "male", "female", "mixed")
-LEVELS = ("", "sc", "bg", "rx", "elite")
+LEVELS = ("", "bg", "inter", "rx", "elite")
 
 
 async def a_check(r):

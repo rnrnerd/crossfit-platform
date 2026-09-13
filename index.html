@@ -146,6 +146,15 @@
     .tag-set { display:flex; gap:6px; flex-wrap:wrap; }
     .tag { font-size:11px; font-weight:600; color:var(--chalk); background:var(--plate);
       border-radius:6px; padding:4px 7px; line-height:1.2; letter-spacing:0; }
+    /* Уровни различаются цветом: в ленте атлет ищет свою категорию, а четыре
+       одинаковые серые плашки заставляют прочитать каждую. Плашка тонированная,
+       а не залитая: четыре плотных пятна рядом с афишей спорили бы с ней.
+       Оттенки взяты в стороне от --live и --accent — красный сигнал «идёт
+       сейчас» и фирменный лайм должны остаться узнаваемыми. */
+    .tag.lv-bg    { color:#4ec97a; background:rgba(78,201,122,.15); }
+    .tag.lv-inter { color:#4a9df0; background:rgba(74,157,240,.15); }
+    .tag.lv-rx    { color:#f5a03c; background:rgba(245,160,60,.15); }
+    .tag.lv-elite { color:#ef4a52; background:rgba(239,74,82,.15); }
     .tag-price { flex:none; font-size:13px; color:var(--steel); }
     .tags.sm { margin-top:8px; }
     .tags.sm .tag { font-size:10px; padding:3px 6px; }
@@ -722,10 +731,10 @@
     const isPast = ev => ev.status === 'finished';
 
     // Порядок фиксированный, от простого к сильному — не алфавитный
-    const LEVELS = [['sc','Sc'], ['bg','Bg'], ['rx','Rx'], ['elite','Elite']];
+    const LEVELS = [['bg','Bg'], ['inter','Inter'], ['rx','Rx'], ['elite','Elite']];
     function tagsRow(ev, small) {
       const set = LEVELS.filter(([k]) => (ev.levels || []).includes(k))
-        .map(([, label]) => `<span class="tag">${label}</span>`).join('');
+        .map(([k, label]) => `<span class="tag lv-${k}">${label}</span>`).join('');
       const price = ev.price_min === null || ev.price_min === undefined
         ? '' : priceRange(ev.price_min, ev.price_max);
       if (!set && !price) return '';

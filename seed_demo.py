@@ -275,10 +275,11 @@ async def main():
                 tg="https://t.me/" + slug.replace("-", "_"),
                 with_banner=ban, with_mark=mk)
             # набор уровней у каждого старта свой — так на превью видно разные плашки
-            LEVEL_SETS = [["rx"], ["sc", "rx"], ["bg", "sc", "rx"], ["rx", "elite"],
-                          ["sc", "rx", "elite"]]
+            LEVEL_SETS = [["rx"], ["inter", "rx"], ["bg", "inter", "rx"], ["rx", "elite"],
+                          ["inter", "rx", "elite"]]
             levels = LEVEL_SETS[sum(map(ord, slug)) % len(LEVEL_SETS)]
-            LEVEL_NAME = {"sc": "Scaled", "bg": "Beginners", "rx": "Rx", "elite": "Elite"}
+            LEVEL_NAME = {"bg": "Beginners", "inter": "Intermediate",
+                          "rx": "Rx", "elite": "Elite"}
             if tsize > 1:
                 did = await c.fetchval(
                     """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price,level)
@@ -408,7 +409,7 @@ async def main():
         b_men   = await make_div(ev_battle, "Rx Мужчины", 1, "male", 1, 4500, "rx")
         b_women = await make_div(ev_battle, "Rx Женщины", 1, "female", 2, 4500, "rx")
         b_pairs = await make_div(ev_battle, "Пары микс", 2, "mixed", 3, 8000, "rx")
-        await make_div(ev_battle, "Scaled Мужчины", 1, "male", 4, 3500, "sc")
+        await make_div(ev_battle, "Intermediate Мужчины", 1, "male", 4, 3500, "inter")
         await make_div(ev_battle, "Elite Мужчины", 1, "male", 5, 6000, "elite")
         w_men   = await make_div(ev_winter, "Rx Мужчины", 1, "male", 1, 3000, "rx")
         w_women = await make_div(ev_winter, "Rx Женщины", 1, "female", 2, 3000, "rx")

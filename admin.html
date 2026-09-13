@@ -59,6 +59,11 @@
       border-radius:6px; padding:3px 7px; white-space:nowrap; }
     .tag.on { background:var(--accent); color:var(--void); }
     .tag.off { color:var(--steel); }
+    /* те же цвета уровней, что в приложении: оператор сверяет глазами */
+    .tag.lv-bg    { color:#4ec97a; background:rgba(78,201,122,.15); }
+    .tag.lv-inter { color:#4a9df0; background:rgba(74,157,240,.15); }
+    .tag.lv-rx    { color:#f5a03c; background:rgba(245,160,60,.15); }
+    .tag.lv-elite { color:#ef4a52; background:rgba(239,74,82,.15); }
 
     /* ── Формы ── */
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
@@ -205,7 +210,7 @@
 
   const STATUS = {draft:'Черновик', registration:'Регистрация', live:'Идёт', finished:'Завершено'};
   const RULE = {any:'Любой', male:'Мужской', female:'Женский', mixed:'Микс'};
-  const LEVEL = {'':'—', sc:'Sc', bg:'Bg', rx:'Rx', elite:'Elite'};
+  const LEVEL = {'':'—', bg:'Bg', inter:'Inter', rx:'Rx', elite:'Elite'};
   const NEWSCAT = {'':'Без раздела', ru:'CF Россия', world:'CF Мир'};
   const fmtMoney = v => v ? String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽' : 'Бесплатно';
 
@@ -396,7 +401,8 @@
           ${divs.map(d => `
             <tr data-id="${d.id}">
               <td><b>${esc(d.name)}</b></td>
-              <td><span class="tag">${LEVEL[d.level] || d.level}</span></td>
+              <td><span class="tag${d.level ? ' lv-' + d.level : ''}">${
+                LEVEL[d.level] || d.level}</span></td>
               <td>${d.team_size > 1 ? `Команда ${d.team_size}` : 'Личный'}</td>
               <td>${RULE[d.gender_rule] || d.gender_rule}</td>
               <td class="num">${fmtMoney(d.price)}</td>
