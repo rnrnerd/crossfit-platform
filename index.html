@@ -1172,7 +1172,7 @@
       ['heats',    'Заходы',     ev => ev.has.heats > 0],
     ];
     let evCur = null, evTab = 'overview', lbDiv = null, lbOpen = new Set();
-    let evLevel = '*', evGender = '*', evFind = '';
+    let evLevel = '', evGender = '', evFind = '';
 
     const LVL_ORDER = ['bg', 'inter', 'rx', 'elite', 'other'];
     const LVL_NAME = {bg:'Bg', inter:'Inter', rx:'Rx', elite:'Elite', other:'Прочие'};
@@ -1181,8 +1181,19 @@
     const divLevel = d => d.level || 'other';
     function divsMatching(ev) {
       return (ev.divisions || []).filter(d =>
-        (evLevel === '*' || divLevel(d) === evLevel) &&
-        (evGender === '*' || d.gender_rule === evGender));
+        divLevel(d) === evLevel && d.gender_rule === evGender);
+    }
+
+    // Фильтр всегда стоит на конкретной категории: «Все» из него убрано.
+    // Значит состояние надо чинить самим — при первом открытии события
+    // и всякий раз, когда набор категорий перестал ему соответствовать.
+    function ensureFilter(ev) {
+      const divs = ev.divisions || [];
+      if (!divs.length || divsMatching(ev).length) return;
+      const my = ev.my_entry && divs.find(d => d.id === ev.my_entry.division_id);
+      const d = my || divs[0];
+      evLevel = divLevel(d);
+      evGender = d.gender_rule;
     }
 
     // Полосы фильтра. Ряд с единственным вариантом не рисуем, а выбор,
@@ -1194,7 +1205,6 @@
       const genders = [...new Set(divs.map(d => d.gender_rule))];
       const row = (items, cur, attr) => items.length < 2 ? '' : `
         <div class="filt" data-axis="${attr}">
-          <button data-v="*" class="${cur === '*' ? 'on' : ''}">Все</button>
           ${items.map(([v, label]) =>
             `<button data-v="${v}" class="${cur === v ? 'on' : ''}">${esc(label)}</button>`).join('')}
         </div>`;
@@ -1203,12 +1213,20 @@
     }
 
     function wireFilter(ev) {
+      const divs = ev.divisions || [];
       $('event-body').querySelectorAll('.filt').forEach(bar =>
         bar.querySelectorAll('button').forEach(b => b.onclick = () => {
-          const was = [evLevel, evGender];
-          if (bar.dataset.axis === 'level') evLevel = b.dataset.v;
-          else evGender = b.dataset.v;
-          if (!divsMatching(ev).length) [evLevel, evGender] = was;
+          const v = b.dataset.v, axis = bar.dataset.axis;
+          if (axis === 'level') evLevel = v; else evGender = v;
+          // Ось, которую тронули, побеждает: нажали «Elite», а женского Elite
+          // нет — двигаем пол, а не откатываем нажатие. Откат без «Все»
+          // читался бы как сломанная кнопка.
+          if (!divsMatching(ev).length) {
+            const d = axis === 'level'
+              ? divs.find(x => divLevel(x) === v)
+              : divs.find(x => x.gender_rule === v);
+            if (d) { evLevel = divLevel(d); evGender = d.gender_rule; }
+          }
           renderEvent(ev);
         }));
     }
@@ -1243,8 +1261,9 @@
       || String(name || '').toLowerCase().includes(evFind.trim().toLowerCase());
 
     function renderEvent(ev) {
-      if (evCur && evCur.id !== ev.id) { evLevel = evGender = '*'; evFind = ''; }
+      if (evCur && evCur.id !== ev.id) { evLevel = evGender = ''; evFind = ''; }
       evCur = ev;
+      ensureFilter(ev);
       renderBar('event', ev.title);
       const tabs = EV_TABS.filter(([, , test]) => test(ev));
       const segs = $('ev-segs');
