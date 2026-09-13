@@ -2292,8 +2292,9 @@
     (async () => {
       await refreshMe();
       const q = new URLSearchParams(location.search);
-      // Кнопка «Открыть» в уведомлении ведёт в мини-апп с параметром
-      // startapp=event_12 — иначе письмо сообщает и никуда не приводит.
+      // Ссылка вида t.me/бот?startapp=event_12 открывает мини-апп сразу на
+      // событии — если у бота в BotFather включён основной мини-апп. Кнопке
+      // в уведомлениях это не нужно: она открывает приложение через ?event=.
       const sp = tg?.initDataUnsafe?.start_param || '';
       const deep = sp.match(/^event_(\d+)$/);
       const eventId = (deep && deep[1]) || q.get('event');

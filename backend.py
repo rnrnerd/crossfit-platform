@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     kind       TEXT NOT NULL,
     text       TEXT NOT NULL,
     link       TEXT NOT NULL DEFAULT '',
-    status     TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|blocked|failed
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|blocked|failed|skipped
     tries      INTEGER NOT NULL DEFAULT 0,
     error      TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -260,6 +260,10 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS notifications_pending
     ON notifications (status, id) WHERE status = 'pending';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
+-- Когда человек сам вошёл через Telegram (подпись initData проверена). Бот
+-- пишет только таким: у сгенерированных сидом и fill_event пользователей
+-- tg_id выдавались подряд после настоящего и могут принадлежать посторонним.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_verified_at TIMESTAMPTZ;
 -- Оплата идёт мимо платформы: она фиксирует заявку и срок, а деньги
 -- собирает организатор. pay_due хранится у заявки, а не считается на лету:
 -- срок назначается в момент подачи и не должен уезжать, если организатор
@@ -411,10 +415,17 @@ async def current_user(request):
     async with db_pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM users WHERE tg_id=$1", tg_id)
         if row:
+            # Отметка «сам входил через Telegram» — только при проверенной подписи
+            # и один раз, а не на каждый запрос. DEV-вход её не получает никогда.
+            if tg and row["tg_verified_at"] is None:
+                row = await c.fetchrow(
+                    "UPDATE users SET tg_verified_at=NOW() WHERE id=$1 RETURNING *",
+                    row["id"])
             return dict(row)
         row = await c.fetchrow(
-            """INSERT INTO users (tg_id, username, name) VALUES ($1,$2,$3)
-               RETURNING *""", tg_id, username, name)
+            """INSERT INTO users (tg_id, username, name, tg_verified_at)
+               VALUES ($1,$2,$3, CASE WHEN $4 THEN NOW() END)
+               RETURNING *""", tg_id, username, name, bool(tg))
         logger.info("Новый пользователь: %s (%s)", name, tg_id)
         return dict(row)
 
@@ -1235,8 +1246,6 @@ async def h_entry_create(r):
 # помечаем `blocked` и больше не трогаем — иначе очередь будет вечно
 # долбиться в того, кто нас не звал.
 
-_BOT_NAME = None
-
 MONTHS_RU = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
              "августа", "сентября", "октября", "ноября", "декабря")
 
@@ -1251,30 +1260,40 @@ def esc_html(t):
 
 
 
-async def bot_username(sess):
-    """Имя бота нужно для ссылки внутрь мини-аппа. Спрашиваем один раз."""
-    global _BOT_NAME
-    if _BOT_NAME is None and BOT_TOKEN:
-        try:
-            async with sess.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe") as r:
-                data = await r.json()
-            _BOT_NAME = data.get("result", {}).get("username") or ""
-        except Exception:
-            _BOT_NAME = ""
-    return _BOT_NAME or ""
-
-
 async def notify(c, user_id, kind, text, link=""):
     """Кладём письмо в очередь. Отправкой занимается фоновая задача:
     подача заявки не должна ждать телеграм и падать вместе с ним."""
     if not user_id:
         return
-    quiet = await c.fetchval("SELECT NOT notify FROM users WHERE id=$1", user_id)
-    if quiet:
+    # Пишем только тем, кто сам входил через Telegram и не выключил уведомления.
+    # Проверенность важнее, чем кажется: у сгенерированных пользователей tg_id
+    # могут принадлежать посторонним, и «Новая заявка — Павел Ольховик» ушла бы
+    # чужому человеку. Telegram скорее всего ответил бы 403, но полагаться на это
+    # нельзя. Заодно локальный DEV-вход без initData не пишет никому.
+    ok = await c.fetchval(
+        "SELECT notify AND tg_verified_at IS NOT NULL FROM users WHERE id=$1", user_id)
+    if not ok:
         return
     await c.execute(
         """INSERT INTO notifications (user_id, kind, text, link)
            VALUES ($1,$2,$3,$4)""", user_id, kind, text, link)
+
+
+async def _due_letters(c):
+    """Ожидающие письма, которые ещё можно отправить.
+
+    Проверка при постановке в очередь не последняя: человек мог выключить
+    уведомления, пока письмо ждало. Такое письмо снимаем, а не шлём.
+    """
+    await c.execute(
+        """UPDATE notifications n SET status='skipped', error='уведомления выключены'
+           FROM users u
+           WHERE u.id = n.user_id AND n.status='pending'
+             AND NOT (u.notify AND u.tg_verified_at IS NOT NULL)""")
+    return await c.fetch(
+        """SELECT n.id, n.text, n.link, n.tries, u.tg_id
+           FROM notifications n JOIN users u ON u.id = n.user_id
+           WHERE n.status='pending' ORDER BY n.id LIMIT 20""")
 
 
 async def notify_loop(app):
@@ -1286,26 +1305,28 @@ async def notify_loop(app):
     while True:
         try:
             async with db_pool.acquire() as c:
-                rows = await c.fetch(
-                    """SELECT n.id, n.text, n.link, n.tries, u.tg_id
-                       FROM notifications n JOIN users u ON u.id = n.user_id
-                       WHERE n.status='pending' ORDER BY n.id LIMIT 20""")
+                rows = await _due_letters(c)
             if rows:
                 async with aiohttp.ClientSession(timeout=timeout) as sess:
-                    uname = await bot_username(sess)
                     for n in rows:
-                        await _send_one(sess, n, uname)
+                        await _send_one(sess, n)
         except Exception as e:
             logger.warning("Очередь уведомлений: %s", e)
         await asyncio.sleep(5)
 
 
-async def _send_one(sess, n, uname):
+async def _send_one(sess, n):
     body = {"chat_id": n["tg_id"], "text": n["text"], "parse_mode": "HTML",
             "disable_web_page_preview": True}
-    if n["link"] and uname:
+    if n["link"] and WEBAPP_URL:
+        # Кнопка web_app, а не ссылка t.me/бот?startapp=. Та открывает мини-апп,
+        # только если в BotFather включён основной мини-апп, — у нашего бота
+        # он выключен, и нажатие вело бы в чат, а не в событие. web_app
+        # открывает приложение сразу; в личке с ботом такая кнопка разрешена.
+        m = re.match(r"^event_(\d+)$", n["link"])
+        target = WEBAPP_URL.rstrip("/") + (f"/?event={m.group(1)}" if m else "/")
         body["reply_markup"] = {"inline_keyboard": [[
-            {"text": "Открыть", "url": f"https://t.me/{uname}?startapp={n['link']}"}]]}
+            {"text": "Открыть", "web_app": {"url": target}}]]}
     status, err = "sent", ""
     try:
         async with sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
