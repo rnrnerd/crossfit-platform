@@ -494,9 +494,9 @@
        Красным крышку не выделяем: --live значит «идёт сейчас», и на карточке
        комплекса этот же красный читался как состояние, а не как ограничение. */
     .acc-terms { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-    .acc-term { border:1px solid var(--hair); border-radius:9px; padding:7px 11px;
-      min-width:88px; }
-    .acc-term b { display:block; font-size:10px; font-weight:500; color:var(--steel);
+    .acc-term { border:1px solid rgba(168,204,58,.28); border-radius:9px;
+      padding:7px 11px; min-width:88px; }
+    .acc-term b { display:block; font-size:10px; font-weight:600; color:var(--accent);
       letter-spacing:.06em; text-transform:uppercase; }
     .acc-term i { display:block; font-style:normal; font-size:14px; font-weight:600;
       color:var(--chalk); margin-top:3px; font-variant-numeric:tabular-nums; }
@@ -1566,7 +1566,7 @@
         // сам: «На время» рядом с «Время» — это одно и то же дважды.
         const terms = [
           ['Формат', w.scoring_note || RES_LABEL[w.result_type] || ''],
-          ['Крышка', w.time_cap],
+          ['Время', w.time_cap],
         ].filter(([, v]) => v).map(([k, v]) =>
           `<div class="acc-term"><b>${k}</b><i>${esc(v)}</i></div>`).join('');
         const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все категории';
