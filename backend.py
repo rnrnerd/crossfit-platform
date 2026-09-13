@@ -48,6 +48,7 @@ import logging
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from urllib.parse import parse_qsl
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 
@@ -241,6 +242,24 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS mark_v INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weight_kg REAL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id INTEGER REFERENCES clubs(id);
+-- Очередь уведомлений. Не «отправил и забыл»: бот может быть не запущен
+-- пользователем, телеграм может лежать, деплой может случиться посреди
+-- отправки. Строка со статусом переживает всё это и показывает, что дошло.
+CREATE TABLE IF NOT EXISTS notifications (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    link       TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending|sent|blocked|failed
+    tries      INTEGER NOT NULL DEFAULT 0,
+    error      TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sent_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS notifications_pending
+    ON notifications (status, id) WHERE status = 'pending';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
 -- Оплата идёт мимо платформы: она фиксирует заявку и срок, а деньги
 -- собирает организатор. pay_due хранится у заявки, а не считается на лету:
 -- срок назначается в момент подачи и не должен уезжать, если организатор
@@ -417,6 +436,7 @@ def _public_user(u, club=None):
             "height_cm": u.get("height_cm"), "weight_kg": u.get("weight_kg"),
             # club_id = NULL означает «независимый атлет», а не «не заполнено»
             "club_id": u.get("club_id"), "club": club,
+            "notify": u.get("notify", True),
             "avatar": f"/api/photo/{u['id']}?v={u['photo_v']}" if u.get("photo_v") else ""}
 
 
@@ -717,9 +737,13 @@ async def h_me_save(r):
                           "fields": {"club_id": "Клуб не найден"}}, status=400)
         row = await c.fetchrow(
             """UPDATE users SET name=$2, gender=$3, city=$4, gym=$5,
-                                height_cm=$6, weight_kg=$7, club_id=$8
+                                height_cm=$6, weight_kg=$7, club_id=$8,
+                                notify = COALESCE($9, notify)
                WHERE id=$1 RETURNING *""",
-            u["id"], name, gender, city, gym, height, weight, club_id)
+            u["id"], name, gender, city, gym, height, weight, club_id,
+            # выключатель приходит только когда его трогали: иначе профиль,
+            # сохранённый со старого экрана, молча включил бы уведомления
+            body["notify"] if isinstance(body.get("notify"), bool) else None)
         club = await c.fetchval("SELECT name FROM clubs WHERE id=$1", club_id) if club_id else None
     return _json({"user": _public_user(dict(row), club),
                   "profile_complete": bool(row["name"] and row["gender"])})
@@ -1171,8 +1195,138 @@ async def h_entry_create(r):
                    VALUES ($1,$2,TRUE)""", entry_id, u["id"])
         logger.info("Заявка %s: событие %s, дивизион %s, атлет %s",
                     entry_id, eid, did, u["id"])
+
+        # Атлету — расписка. Она единственная, что живёт вне приложения,
+        # поэтому в ней повторён срок оплаты: напоминания о нём пока нет.
+        money_line = ""
+        if d["price"]:
+            money_line = f"\nУчастие: {d['price']} ₽, оплата у организатора"
+            if due:
+                money_line += f"\nОплатите до {fmt_ru_date(due)}, иначе место освободится"
+        await notify(c, u["id"], "entry_created",
+                     f"<b>Заявка принята</b>\n{esc_html(ev['title'])}\n"
+                     f"Категория: {esc_html(d['name'])}{money_line}",
+                     f"event_{eid}")
+
+        # Организаторам — что пришёл человек. Судьям не шлём: набор заявок
+        # не их дело, а лишнее письмо в день старта только мешает.
+        who = u["name"] or "Без имени"
+        total = await c.fetchval(
+            "SELECT COUNT(*) FROM entries WHERE event_id=$1 AND status='active'", eid)
+        for row in await c.fetch(
+                """SELECT user_id FROM event_staff
+                   WHERE event_id=$1 AND role='organizer'""", eid):
+            # своя заявка организатора — не новость для него самого:
+            # расписку он уже получил выше, второе письмо было бы шумом
+            if row["user_id"] == u["id"]:
+                continue
+            await notify(c, row["user_id"], "entry_new",
+                         f"<b>Новая заявка</b>\n{esc_html(ev['title'])}\n"
+                         f"{esc_html(who)} — {esc_html(d['name'])}\n"
+                         f"Активных заявок: {total}",
+                         f"event_{eid}")
     return _json({"entry_id": entry_id, "division_id": did, "division": d["name"],
                   "pay_due": str(due)})
+
+
+# ── Уведомления в боте ────────────────────────────────────────────────
+# Бот не может написать первым тому, кто его не запускал: телеграм ответит
+# 403. Это не ошибка доставки, а состояние человека, поэтому такие письма
+# помечаем `blocked` и больше не трогаем — иначе очередь будет вечно
+# долбиться в того, кто нас не звал.
+
+_BOT_NAME = None
+
+MONTHS_RU = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+             "августа", "сентября", "октября", "ноября", "декабря")
+
+
+def fmt_ru_date(d):
+    return f"{d.day} {MONTHS_RU[d.month - 1]}" if d else ""
+
+
+def esc_html(t):
+    """Текст в сообщении бота: parse_mode=HTML, а имена приходят от людей."""
+    return html_mod.escape(str(t or ""), quote=False)
+
+
+
+async def bot_username(sess):
+    """Имя бота нужно для ссылки внутрь мини-аппа. Спрашиваем один раз."""
+    global _BOT_NAME
+    if _BOT_NAME is None and BOT_TOKEN:
+        try:
+            async with sess.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe") as r:
+                data = await r.json()
+            _BOT_NAME = data.get("result", {}).get("username") or ""
+        except Exception:
+            _BOT_NAME = ""
+    return _BOT_NAME or ""
+
+
+async def notify(c, user_id, kind, text, link=""):
+    """Кладём письмо в очередь. Отправкой занимается фоновая задача:
+    подача заявки не должна ждать телеграм и падать вместе с ним."""
+    if not user_id:
+        return
+    quiet = await c.fetchval("SELECT NOT notify FROM users WHERE id=$1", user_id)
+    if quiet:
+        return
+    await c.execute(
+        """INSERT INTO notifications (user_id, kind, text, link)
+           VALUES ($1,$2,$3,$4)""", user_id, kind, text, link)
+
+
+async def notify_loop(app):
+    if not BOT_TOKEN:
+        logger.warning("BOT_TOKEN не задан — уведомления отправляться не будут")
+        return
+    await asyncio.sleep(5)
+    timeout = aiohttp.ClientTimeout(total=15)
+    while True:
+        try:
+            async with db_pool.acquire() as c:
+                rows = await c.fetch(
+                    """SELECT n.id, n.text, n.link, n.tries, u.tg_id
+                       FROM notifications n JOIN users u ON u.id = n.user_id
+                       WHERE n.status='pending' ORDER BY n.id LIMIT 20""")
+            if rows:
+                async with aiohttp.ClientSession(timeout=timeout) as sess:
+                    uname = await bot_username(sess)
+                    for n in rows:
+                        await _send_one(sess, n, uname)
+        except Exception as e:
+            logger.warning("Очередь уведомлений: %s", e)
+        await asyncio.sleep(5)
+
+
+async def _send_one(sess, n, uname):
+    body = {"chat_id": n["tg_id"], "text": n["text"], "parse_mode": "HTML",
+            "disable_web_page_preview": True}
+    if n["link"] and uname:
+        body["reply_markup"] = {"inline_keyboard": [[
+            {"text": "Открыть", "url": f"https://t.me/{uname}?startapp={n['link']}"}]]}
+    status, err = "sent", ""
+    try:
+        async with sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                             json=body) as r:
+            data = await r.json()
+        if not data.get("ok"):
+            code = data.get("error_code")
+            err = str(data.get("description", ""))[:200]
+            # 403 — человек не запускал бота или заблокировал его: это не сбой,
+            # повторять бессмысленно. 400 — наша ошибка в тексте, тоже терминально.
+            status = "blocked" if code == 403 else "failed" if code == 400 else "pending"
+    except Exception as e:
+        status, err = "pending", str(e)[:200]
+    async with db_pool.acquire() as c:
+        if status == "pending" and n["tries"] + 1 >= 5:
+            status = "failed"
+        await c.execute(
+            """UPDATE notifications
+               SET status=$2, tries=tries+1, error=$3,
+                   sent_at = CASE WHEN $2='sent' THEN NOW() ELSE sent_at END
+               WHERE id=$1""", n["id"], status, err)
 
 
 async def release_unpaid_loop(app):
@@ -1180,8 +1334,9 @@ async def release_unpaid_loop(app):
 
     Заявку не удаляем и не прячем: ставим `withdrawn` с причиной. Человек
     должен увидеть, почему его сняли, а организатор — вернуть заявку одним
-    кликом, если деньги пришли позже. Уведомлений пока нет (#10), и это
-    единственное, что смягчает тихую потерю участника.
+    кликом, если деньги пришли позже. Письма о снятии пока нет: очередь
+    уведомлений уже есть, но о неоплате бот не сообщает — человек узнаёт
+    о снятии только в приложении.
     """
     await asyncio.sleep(30)
     while True:
@@ -3137,11 +3292,13 @@ def main():
             app["news_import"] = asyncio.create_task(news_import_loop(app))
             # освобождение мест по неоплаченным заявкам
             app["release_unpaid"] = asyncio.create_task(release_unpaid_loop(app))
+            # очередь уведомлений в боте
+            app["notify"] = asyncio.create_task(notify_loop(app))
         else:
             logger.warning("DATABASE_URL не задан — API работать не будет")
 
     async def on_cleanup(app):
-        for key in ("news_import", "release_unpaid"):
+        for key in ("news_import", "release_unpaid", "notify"):
             task = app.get(key)
             if task:
                 task.cancel()

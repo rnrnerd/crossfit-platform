@@ -272,6 +272,19 @@
     .opt:not([disabled]):active, .seg:active, .tab:active, .links a:active {
       background:rgba(255,255,255,.05); }
     .btn.quiet { background:var(--plate); color:var(--chalk); }
+    .switch-row { display:flex; align-items:center; justify-content:space-between; gap:14px;
+      margin:18px var(--pad) 0; padding:14px 16px; background:var(--plate);
+      border-radius:12px; cursor:pointer; }
+    .switch-row b { display:block; font-size:15px; font-weight:500; }
+    .switch-row small { display:block; font-size:13px; color:var(--steel); margin-top:3px; }
+    .switch-row input { position:absolute; opacity:0; width:1px; height:1px; }
+    .switch { flex:none; width:46px; height:28px; border-radius:14px; background:#2a2c31;
+      position:relative; transition:background .15s; }
+    .switch::after { content:''; position:absolute; top:3px; left:3px; width:22px;
+      height:22px; border-radius:50%; background:var(--steel); transition:transform .15s, background .15s; }
+    .switch-row input:checked + .switch { background:var(--chalk); }
+    .switch-row input:checked + .switch::after { transform:translateX(18px); background:var(--void); }
+    .switch-row input:focus-visible + .switch { outline:2px solid var(--chalk); outline-offset:2px; }
     /* неактивная кнопка не должна выглядеть тяжелее соседней активной,
        поэтому гасим её тоном, а не прозрачностью */
     .btn[disabled] { background:var(--plate); color:var(--steel); cursor:default; }
@@ -2190,7 +2203,15 @@
           </select></div>
         <div class="field"><label for="p-city">Город</label>
           <input id="p-city" value="${esc(u.city)}" placeholder="Севастополь" /></div>
-        <div class="pad" style="padding-top:8px"><button class="btn" id="p-save">Сохранить</button></div>
+        <label class="switch-row" for="p-notify">
+          <span><b>Уведомления в боте</b>
+            <small>${me.is_organizer
+              ? 'Подтверждение ваших заявок и новые заявки на ваших стартах'
+              : 'Подтверждение заявки со сроком оплаты'}</small></span>
+          <input type="checkbox" id="p-notify" role="switch"${u.notify === false ? '' : ' checked'}>
+          <i class="switch" aria-hidden="true"></i>
+        </label>
+        <div class="pad" style="padding-top:18px"><button class="btn" id="p-save">Сохранить</button></div>
         <div id="p-err"></div>
         <div style="height:32px"></div>`;
       $('p-save').onclick = saveProfile;
@@ -2238,6 +2259,7 @@
         gym: me.user.gym || '',
         height_cm: fields.height_cm.value, weight_kg: fields.weight_kg.value,
         club_id: fields.club_id.value,
+        notify: $('p-notify').checked,
       });
       btn.disabled = false; btn.textContent = 'Сохранить';
 
@@ -2270,7 +2292,12 @@
     (async () => {
       await refreshMe();
       const q = new URLSearchParams(location.search);
-      const eventId = q.get('event'), newsId = q.get('news'), screen = q.get('screen');
+      // Кнопка «Открыть» в уведомлении ведёт в мини-апп с параметром
+      // startapp=event_12 — иначе письмо сообщает и никуда не приводит.
+      const sp = tg?.initDataUnsafe?.start_param || '';
+      const deep = sp.match(/^event_(\d+)$/);
+      const eventId = (deep && deep[1]) || q.get('event');
+      const newsId = q.get('news'), screen = q.get('screen');
       if (eventId)      { renderBar('event',''); openEvent(eventId); }
       else if (newsId)  { renderBar('article',''); openArticle(newsId); }
       else show(SCREENS.includes(screen) ? screen : 'home');
