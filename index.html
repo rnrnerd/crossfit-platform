@@ -378,8 +378,40 @@
       letter-spacing:-.02em; color:var(--chalk); text-align:left; }
     .pick svg { width:12px; height:8px; flex:none; color:var(--steel); }
     .pick .prog { flex:none; font-size:13px; color:var(--steel); }
+    .pick button[disabled] { cursor:default; }
 
-    /* ── Протокол ── */
+    /* Фильтр события: уровень и пол отдельными осями. Категории у организатора
+       названы как ему удобно, а ищут их всегда одинаково — «мой уровень, мой
+       пол». Ряд не показываем, если выбор в нём один: это не выбор. */
+    .filt { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
+      padding:0 var(--pad); margin-top:10px; }
+    .filt::-webkit-scrollbar { display:none; }
+    .filt button { flex:none; font-size:13px; font-weight:500; color:var(--steel);
+      background:var(--plate); border:none; border-radius:8px; padding:8px 12px;
+      min-height:36px; cursor:pointer; }
+    .filt button.on { background:var(--chalk); color:var(--void); }
+    .filt button:active { background:rgba(255,255,255,.12); }
+    .ev-find { margin:12px var(--pad) 2px; position:relative; }
+    .ev-find input { width:100%; height:44px; border:none; border-radius:10px;
+      background:var(--plate); color:var(--chalk); font:inherit; font-size:15px;
+      padding:0 38px 0 14px; }
+    .ev-find input::placeholder { color:var(--steel); }
+    .ev-find input:focus { outline:none; box-shadow:inset 0 0 0 1px var(--steel); }
+    .ev-find .clr { position:absolute; right:6px; top:6px; width:32px; height:32px;
+      border:none; background:none; color:var(--steel); font-size:20px; cursor:pointer; }
+    /* Ваши заходы: шапка вкладки, а не строка в общем списке — в день старта
+       это единственное, за чем сюда заходят. */
+    .mine-heats { margin:12px var(--pad) 0; background:var(--plate); border-radius:12px;
+      padding:14px 16px; }
+    .mine-heats .t { font-size:13px; color:var(--steel); }
+    .mine-heats .r { display:flex; align-items:baseline; justify-content:space-between;
+      gap:12px; margin-top:10px; }
+    .mine-heats .w { font-size:15px; font-weight:500; }
+    .mine-heats .d { font-size:13px; color:var(--steel); margin-top:2px; }
+    .mine-heats .tm { flex:none; font-size:17px; font-weight:700;
+      font-variant-numeric:tabular-nums; }
+
+    /* ── Лидерборд ── */
     .lb-row { display:grid; grid-template-columns:34px 36px 1fr auto 20px; align-items:center;
       gap:10px; width:100%; text-align:left; background:none; border:none; cursor:pointer;
       padding:12px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
@@ -387,7 +419,15 @@
        протокол должен оставаться читаемой таблицей, а не подсветкой */
     .lb-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
     .lb-place { font-size:19px; font-weight:700; color:var(--steel); font-variant-numeric:tabular-nums; }
-    .lb-row.is-me .lb-place { color:var(--accent); }
+    /* Пьедестал: цвет и мягкое свечение того же тона. Раньше медалей не было —
+       на трёх демо-строках без них было чище, но в лидерборде на два десятка
+       человек призовая тройка должна выхватываться взглядом сразу. Красим
+       только цифру места: заливать строку значит спорить со «своей» строкой. */
+    .lb-row.m1 .lb-place { color:#e8c14a; text-shadow:0 0 14px rgba(232,193,74,.45); }
+    .lb-row.m2 .lb-place { color:#c6ccd4; text-shadow:0 0 14px rgba(198,204,212,.35); }
+    .lb-row.m3 .lb-place { color:#cd8f52; text-shadow:0 0 14px rgba(205,143,82,.4); }
+    /* своя строка важнее медали: акцент перебивает пьедестал */
+    .lb-row.is-me .lb-place { color:var(--accent); text-shadow:none; }
     .lb-ava { width:36px; height:36px; border-radius:50%; background:var(--plate); overflow:hidden;
       display:grid; place-items:center; font-size:12px; font-weight:700; color:var(--steel); }
     .lb-ava img { width:100%; height:100%; object-fit:cover; }
@@ -1092,14 +1132,84 @@
     // ничего нет, обещает содержимое, которого организатор не публиковал.
     const EV_TABS = [
       ['overview', 'Обзор',      () => true],
-      ['protocol', 'Протокол',   ev => ev.has.results > 0],
+      ['protocol', 'Лидерборд',  ev => ev.has.results > 0],
       ['wods',     'Комплексы',  ev => ev.has.wods > 0],
       ['schedule', 'Расписание', ev => ev.has.schedule > 0],
       ['heats',    'Заходы',     ev => ev.has.heats > 0],
     ];
     let evCur = null, evTab = 'overview', lbDiv = null, lbOpen = new Set();
+    let evLevel = '*', evGender = '*', evFind = '';
+
+    const LVL_ORDER = ['bg', 'inter', 'rx', 'elite', 'other'];
+    const LVL_NAME = {bg:'Bg', inter:'Inter', rx:'Rx', elite:'Elite', other:'Прочие'};
+    const GEN_NAME = {male:'Мужчины', female:'Женщины', mixed:'Микс', any:'Общая'};
+
+    const divLevel = d => d.level || 'other';
+    function divsMatching(ev) {
+      return (ev.divisions || []).filter(d =>
+        (evLevel === '*' || divLevel(d) === evLevel) &&
+        (evGender === '*' || d.gender_rule === evGender));
+    }
+
+    // Полосы фильтра. Ряд с единственным вариантом не рисуем, а выбор,
+    // который ничего не оставляет, откатываем — пустой экран из-за фильтра
+    // человек читает как «данных нет».
+    function filterBar(ev) {
+      const divs = ev.divisions || [];
+      const levels = LVL_ORDER.filter(l => divs.some(d => divLevel(d) === l));
+      const genders = [...new Set(divs.map(d => d.gender_rule))];
+      const row = (items, cur, attr) => items.length < 2 ? '' : `
+        <div class="filt" data-axis="${attr}">
+          <button data-v="*" class="${cur === '*' ? 'on' : ''}">Все</button>
+          ${items.map(([v, label]) =>
+            `<button data-v="${v}" class="${cur === v ? 'on' : ''}">${esc(label)}</button>`).join('')}
+        </div>`;
+      return row(levels.map(l => [l, LVL_NAME[l]]), evLevel, 'level')
+           + row(genders.map(g => [g, GEN_NAME[g] || g]), evGender, 'gender');
+    }
+
+    function wireFilter(ev) {
+      $('event-body').querySelectorAll('.filt').forEach(bar =>
+        bar.querySelectorAll('button').forEach(b => b.onclick = () => {
+          const was = [evLevel, evGender];
+          if (bar.dataset.axis === 'level') evLevel = b.dataset.v;
+          else evGender = b.dataset.v;
+          if (!divsMatching(ev).length) [evLevel, evGender] = was;
+          renderEvent(ev);
+        }));
+    }
+
+    function findBar(placeholder) {
+      return `<div class="ev-find">
+        <input id="ev-find" placeholder="${esc(placeholder)}" value="${esc(evFind)}"
+               autocomplete="off" enterkeyhint="search">
+        ${evFind ? '<button class="clr" id="ev-find-clr" aria-label="Очистить">×</button>' : ''}
+      </div>`;
+    }
+
+    function wireFind(ev) {
+      const inp = $('ev-find');
+      if (!inp) return;
+      let t;
+      inp.oninput = () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          evFind = inp.value;
+          const at = inp.selectionStart;
+          renderEvent(ev);
+          const back = $('ev-find');
+          if (back) { back.focus(); back.setSelectionRange(at, at); }
+        }, 200);
+      };
+      const clr = $('ev-find-clr');
+      if (clr) clr.onclick = () => { evFind = ''; renderEvent(ev); };
+    }
+
+    const findHit = name => !evFind
+      || String(name || '').toLowerCase().includes(evFind.trim().toLowerCase());
 
     function renderEvent(ev) {
+      if (evCur && evCur.id !== ev.id) { evLevel = evGender = '*'; evFind = ''; }
       evCur = ev;
       renderBar('event', ev.title);
       const tabs = EV_TABS.filter(([, , test]) => test(ev));
@@ -1224,7 +1334,7 @@
     const FEED_DOWN = `<div class="note">Связи с системой соревнования нет.<br>
       Данные появятся, как только она ответит.</div>`;
 
-    // ── Протокол ──
+    // ── Лидерборд ──
     const RES_LABEL = {time:'Время', reps:'Повторы', weight:'Вес'};
     const STATUS_LABEL = {dnf:'Не закончил', dns:'Не вышел', cap:'Не уложился'};
     const STAGE_LABEL = {qualification:'Квалификация', semifinal:'Полуфинал', final:'Финал'};
@@ -1245,16 +1355,24 @@
       const box = $('event-body');
       const divs = ev.divisions || [];
       if (!divs.length) { box.innerHTML = '<div class="note">Категории не заданы.</div>'; return; }
-      if (!lbDiv || !divs.some(d => d.id === lbDiv)) {
-        // по умолчанию — своя категория: атлет открывает протокол ради своей строки
-        lbDiv = ev.my_entry ? ev.my_entry.division_id : divs[0].id;
+      const fit = divsMatching(ev);
+      // место считается внутри категории, поэтому лидерборд всегда про одну.
+      // По умолчанию своя: атлет открывает его ради своей строки
+      if (!fit.some(d => d.id === lbDiv)) {
+        const my = ev.my_entry && fit.find(d => d.id === ev.my_entry.division_id);
+        lbDiv = (my || fit[0] || divs[0]).id;
       }
-      box.innerHTML = `<div class="pick"><button id="lb-pick">
-          <span id="lb-pick-name">${esc((divs.find(d => d.id === lbDiv) || divs[0]).name)}</span>
-          <svg viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.6"
-               stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+      const cur = divs.find(d => d.id === lbDiv) || divs[0];
+      const many = fit.length > 1;
+      box.innerHTML = filterBar(ev) + findBar('Найти участника')
+        + `<div class="pick"><button id="lb-pick"${many ? '' : ' disabled'}>
+          <span id="lb-pick-name">${esc(cur.name)}</span>
+          ${many ? `<svg viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>` : ''}
         </button><div class="prog" id="lb-prog">Считаем…</div></div><div id="lb-body"></div>`;
-      $('lb-pick').onclick = () => pickDivisionFor(ev);
+      wireFilter(ev);
+      wireFind(ev);
+      if (many) $('lb-pick').onclick = () => pickDivisionFor(ev);
       renderProtocol(ev);
     }
 
@@ -1287,7 +1405,7 @@
       }
       if (d.error) {
         $('lb-prog').textContent = '';
-        body.innerHTML = '<div class="note">Протокол не загрузился.</div>';
+        body.innerHTML = '<div class="note">Лидерборд не загрузился.</div>';
         return;
       }
       $('lb-prog').textContent = d.wods_total
@@ -1297,7 +1415,15 @@
         body.innerHTML = '<div class="note">В этой категории пока нет заявок.</div>';
         return;
       }
-      body.innerHTML = d.rows.map(r => {
+      // Поиск прячет чужие строки, но не пересчитывает места: место человека
+      // в лидерборде не зависит от того, кого сейчас видно на экране.
+      const rows = d.rows.filter(r => findHit(r.name)
+        || (r.members || []).some(findHit));
+      if (!rows.length) {
+        body.innerHTML = '<div class="note">Никого не нашлось.</div>';
+        return;
+      }
+      body.innerHTML = rows.map(r => {
         const isMine = !!r.is_me;
         const open = lbOpen.has(String(r.entry_id ?? r.name));
         const detail = r.wods.map(w => `
@@ -1308,7 +1434,8 @@
           </div>`).join('') || '<div class="pw pw-name">Комплексов ещё нет</div>';
         return `
         <div class="lb-item${open ? ' open' : ''}" data-id="${r.entry_id ?? r.name}">
-          <button class="lb-row${isMine ? ' is-me' : ''}">
+          <button class="lb-row${isMine ? ' is-me' : ''}${
+            r.place <= 3 ? ' m' + r.place : ''}">
             <div class="lb-place">${r.place}</div>
             <div class="lb-ava">${r.avatar
               ? `<img src="${esc(r.avatar)}" alt="" loading="lazy">` : esc(initials(r.name))}</div>
@@ -1363,7 +1490,17 @@
       if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Комплексы не загрузились.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Комплексы пока не объявлены.</div>'; return; }
-      box.innerHTML = list.map(w => {
+      // комплекс без категорий идёт у всех — он остаётся при любом фильтре
+      const ids = new Set(divsMatching(ev).map(d => d.id));
+      const shown = list.filter(w => !w.divisions.length
+        || w.divisions.some(d => ids.has(d.id)));
+      if (!shown.length) {
+        box.innerHTML = filterBar(ev)
+          + '<div class="note">В этой категории комплексов нет.</div>';
+        wireFilter(ev);
+        return;
+      }
+      box.innerHTML = filterBar(ev) + shown.map(w => {
         const meta = [STAGE_LABEL[w.stage] || '', RES_LABEL[w.result_type] || '',
                       w.time_cap ? `крышка ${w.time_cap}` : ''].filter(Boolean).join(', ');
         const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все категории';
@@ -1389,6 +1526,7 @@
       }).join('');
       box.querySelectorAll('.acc').forEach(a =>
         a.querySelector('.acc-head').onclick = () => a.classList.toggle('open'));
+      wireFilter(ev);
     }
 
     // ── Расписание ──
@@ -1399,17 +1537,23 @@
       if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Расписание не загрузилось.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Расписание пока не опубликовано.</div>'; return; }
-      const days = [...new Set(list.map(s => s.day))];
-      box.innerHTML = days.map(day => `
+      // строка без категории — общая (регистрация, перерыв, награждение),
+      // она нужна всем и фильтром не убирается
+      const names = new Set(divsMatching(ev).map(d => d.name));
+      const shown = list.filter(s => !s.division || names.has(s.division));
+      const days = [...new Set(shown.map(s => s.day))];
+      box.innerHTML = filterBar(ev) + (shown.length ? days.map(day => `
         ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
-        ${list.filter(s => s.day === day).map(s => `
+        ${shown.filter(s => s.day === day).map(s => `
           <div class="sch-row">
             <div class="sch-time">${esc(s.time)}</div>
             <div>
               <div class="sch-title">${esc(s.title)}</div>
               <div class="row-sub">${esc([s.location, s.division].filter(Boolean).join(', '))}</div>
             </div>
-          </div>`).join('')}`).join('');
+          </div>`).join('')}`).join('')
+        : '<div class="note">В этой категории пунктов расписания нет.</div>');
+      wireFilter(ev);
     }
 
     // ── Заходы ──
@@ -1421,10 +1565,44 @@
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Заходы не загрузились.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Заходы пока не опубликованы.</div>'; return; }
       evHeats = list;
-      const days = [...new Set(list.map(h => h.day))];
-      box.innerHTML = days.map(day => `
+
+      // «Ваши заходы» — шапка вкладки. В день старта сюда заходят ровно
+      // за этим: где я и когда, по каждому комплексу. Список перестраивается
+      // сам, как только организатор поменял расстановку.
+      const mineAll = list.filter(h => h.entries.some(a => a.is_me));
+      const mineBlock = !mineAll.length ? '' : `
+        <div class="mine-heats">
+          <div class="t">Ваши заходы</div>
+          ${mineAll.map(h => {
+            const me = h.entries.find(a => a.is_me);
+            return `<div class="r">
+              <div>
+                <div class="w">${esc(h.wod || 'Заход')}</div>
+                <div class="d">Заход ${h.number}${me && me.lane ? ` · дорожка ${me.lane}` : ''}${
+                  h.day ? ' · ' + esc(fmtDayLoose(h.day)) : ''}</div>
+              </div>
+              <div class="tm">${esc(h.start_time || '—')}</div>
+            </div>`;
+          }).join('')}
+        </div>`;
+
+      const ids = new Set(divsMatching(ev).map(d => d.name));
+      const fits = list.filter(h =>
+        (!h.entries.length || h.entries.some(a => ids.has(a.division)))
+        && (!evFind || h.entries.some(a => findHit(a.name)
+             || (a.members || []).some(findHit))));
+      if (!fits.length) {
+        box.innerHTML = filterBar(ev) + findBar('Найти участника') + mineBlock
+          + `<div class="note">${evFind
+            ? 'Никого не нашлось.' : 'В этой категории заходов нет.'}</div>`;
+        wireFilter(ev); wireFind(ev);
+        return;
+      }
+      const days = [...new Set(fits.map(h => h.day))];
+      box.innerHTML = filterBar(ev) + findBar('Найти участника') + mineBlock
+        + days.map(day => `
         ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
-        ${list.filter(h => h.day === day).map(h => {
+        ${fits.filter(h => h.day === day).map(h => {
           const mine = h.entries.some(a => a.is_me);
           // Номер захода считается внутри категории, поэтому «Заход 1» за день
           // встречается столько раз, сколько категорий. Без названия категории
@@ -1441,6 +1619,8 @@
           </button>`;
         }).join('')}`).join('');
       box.querySelectorAll('.heat-row').forEach(b => b.onclick = () => openHeat(ev, b.dataset.id));
+      wireFilter(ev);
+      wireFind(ev);
     }
 
     let evHeats = [];

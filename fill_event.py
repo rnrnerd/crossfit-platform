@@ -284,15 +284,23 @@ async def main():
                             """INSERT INTO heat_entries (heat_id,entry_id,lane)
                                VALUES ($1,$2,$3)""",
                             [(hid, e, i + 1) for i, e in enumerate(chunk)])
-                        sched.append((day, hhmm(clock),
-                                      f"{w['name']} — {d['name']}, заход {hn // LANES + 1}",
-                                      "Площадка A" if day_i == 0 else "Главная арена",
-                                      d["id"]))
                         clock += 20
                 clock += 15                       # перестановка снаряда между КП
 
+            # Заходы в расписание не дублируем: их время живёт на своей вкладке.
+            # Полсотни строк «Комплекс — категория, заход N» делают расписание
+            # нечитаемым, а расписание нужно для другого — для дня целиком.
             for t, title, place in DAY_SCHEDULE:
                 sched.append((day, t, title, place, None))
+            for wid, w in wod_ids:
+                if w["day"] != day_i:
+                    continue
+                first = await c.fetchval(
+                    "SELECT MIN(start_time) FROM heats WHERE event_id=$1 AND wod_id=$2",
+                    eid, wid)
+                if first:
+                    sched.append((day, first, f"{w['name']} — начало", 
+                                  "Площадка A" if day_i == 0 else "Главная арена", None))
             if day_i == len(days) - 1:
                 sched.append((day, "19:30", "Награждение", "Главная арена", None))
 
