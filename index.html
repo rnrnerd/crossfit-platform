@@ -1426,10 +1426,15 @@
         ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
         ${list.filter(h => h.day === day).map(h => {
           const mine = h.entries.some(a => a.is_me);
+          // Номер захода считается внутри категории, поэтому «Заход 1» за день
+          // встречается столько раз, сколько категорий. Без названия категории
+          // в строке свой заход в списке на полсотни строк не находится.
+          const cats = [...new Set(h.entries.map(a => a.division).filter(Boolean))];
           return `
           <button class="heat-row${mine ? ' is-me' : ''}" data-id="${h.id}">
             <div>
-              <div class="heat-num">Заход ${h.number}${mine ? ' · ваш' : ''}</div>
+              <div class="heat-num">${esc(cats.join(' и ') || 'Заход')} · заход ${
+                h.number}${mine ? ' · ваш' : ''}</div>
               <div class="row-sub">${esc([h.wod, h.location].filter(Boolean).join(', '))}</div>
             </div>
             <div class="heat-time">${esc(h.start_time)}</div>
