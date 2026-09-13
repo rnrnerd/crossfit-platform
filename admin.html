@@ -65,6 +65,40 @@
     .tag.lv-rx    { color:#f5a03c; background:rgba(245,160,60,.15); }
     .tag.lv-elite { color:#ef4a52; background:rgba(239,74,82,.15); }
 
+    /* Вкладки внутри события: страница успела собрать настройки, категории,
+       комплексы, результаты, заявки и судей — одним свитком это не читается. */
+    .etabs { display:flex; flex-wrap:wrap; gap:2px; margin:26px 0 20px;
+      box-shadow:inset 0 -1px 0 var(--hair); }
+    .etab { padding:10px 14px; background:none; border:none; cursor:pointer;
+      font:inherit; font-size:14px; color:var(--steel);
+      border-bottom:2px solid transparent; margin-bottom:-1px; }
+    .etab:hover { color:var(--chalk); }
+    .etab.on { color:var(--accent); border-bottom-color:var(--accent); }
+
+    /* Сетка результатов: в ячейке сырой результат, под ней место и баллы */
+    .grid-res { overflow-x:auto; }
+    .grid-res th.wod { min-width:124px; }
+    .grid-res td.cell { padding:4px 6px; }
+    .grid-res input.val { width:98px; background:var(--plate2); border:1px solid transparent;
+      border-radius:6px; padding:7px 8px; color:var(--chalk); font:inherit;
+      font-size:14px; font-variant-numeric:tabular-nums; text-align:right; }
+    .grid-res input.val:focus { outline:none; border-color:var(--accent); }
+    .grid-res input.val.bad { border-color:var(--live); }
+    .grid-res input.val.ok { border-color:rgba(168,204,58,.55); }
+    .grid-res .pts { font-size:11px; color:var(--steel); text-align:right;
+      margin-top:3px; min-height:14px; }
+    .grid-res .pts b { color:var(--chalk); font-weight:600; }
+
+    .checks { display:flex; flex-wrap:wrap; gap:8px; }
+    .chk { display:inline-flex; align-items:center; gap:7px; background:var(--plate2);
+      border-radius:8px; padding:8px 11px; font-size:14px; cursor:pointer; }
+    .chk input { accent-color:var(--accent); }
+
+    /* .tag используется и как метка, и как кнопка фильтра заявок */
+    button.tag { border:none; cursor:pointer; font:inherit; font-size:11px;
+      font-weight:600; color:var(--chalk); }
+    button.tag:hover { background:var(--plate); }
+
     /* ── Формы ── */
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
       gap:14px; margin-top:18px; }
@@ -270,7 +304,10 @@
     <div class="f"><label for="${id}">${label}</label>
       <input id="${id}" type="${type}" value="${esc(val ?? '')}" ${extra} /></div>`;
 
-  async function editEvent(id) {
+  const EV_TABS = [['set', 'Настройки'], ['div', 'Категории'], ['wod', 'Комплексы'],
+                   ['res', 'Результаты'], ['ent', 'Заявки'], ['stf', 'Судьи']];
+
+  async function editEvent(id, pane = 'set') {
     const m = $('main');
     m.innerHTML = '<div class="note">Загрузка…</div>';
     const ev = id ? await api('/api/admin/events/' + id)
@@ -284,6 +321,11 @@
         <button class="btn quiet" id="back">К списку</button>
       </div>
 
+      ${id ? `<div class="etabs">${EV_TABS.map(([k, label]) =>
+        `<button class="etab${k === pane ? ' on' : ''}" data-pane="${k}">${label}</button>`
+      ).join('')}</div>` : ''}
+
+      <div class="epane" id="p-set"${id && pane !== 'set' ? ' hidden' : ''}>
       <div class="grid">
         ${F('ev-title', 'Название', ev.title)}
         ${F('ev-city', 'Город', ev.city)}
@@ -328,34 +370,67 @@
           <div class="bar"><button class="btn quiet" id="up-mark">Загрузить</button></div>
         </div>
       </div>
-
-      <div class="row-between" style="margin-top:34px">
-        <h2>Категории</h2><button class="btn quiet" id="new-div">Добавить</button>
+      ` : ''}
       </div>
-      <div id="divs"></div>
 
-      ${ev.feed_url ? `<div class="warn"><b>Турнир ведётся во внешнем модуле.</b>
-        Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы категория
-        попал в протокол, заполните у него «Категория в модуле» и «Пол в модуле» —
-        модуль знает не её, а пару «категория + пол» в своих терминах.</div>` : ''}
+      ${id ? `
+      <div class="epane" id="p-div"${pane === 'div' ? '' : ' hidden'}>
+        <div class="row-between">
+          <h2>Категории</h2><button class="btn quiet" id="new-div">Добавить</button>
+        </div>
+        <div id="divs"></div>
+        ${ev.feed_url ? `<div class="warn"><b>Турнир ведётся во внешнем модуле.</b>
+          Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы категория
+          попала в протокол, заполните у неё «Категория в модуле» и «Пол в модуле» —
+          модуль знает не её, а пару «категория + пол» в своих терминах.</div>` : ''}
+      </div>
 
-      <div class="row-between" style="margin-top:34px"><h2>Судьи и организаторы</h2></div>
-      <div id="staff"><div class="note">Загрузка…</div></div>
+      <div class="epane" id="p-wod"${pane === 'wod' ? '' : ' hidden'}>
+        <div class="row-between">
+          <h2>Комплексы</h2><button class="btn quiet" id="new-wod">Добавить</button>
+        </div>
+        <div id="wods"><div class="note">Загрузка…</div></div>
+      </div>
 
-      <div class="row-between" style="margin-top:34px"><h2>Заявки</h2></div>
-      <div id="entries"><div class="note">Загрузка…</div></div>
-      ` : ''}`;
+      <div class="epane" id="p-res"${pane === 'res' ? '' : ' hidden'}>
+        <h2>Результаты</h2>
+        <div id="results"><div class="note">Загрузка…</div></div>
+      </div>
+
+      <div class="epane" id="p-ent"${pane === 'ent' ? '' : ' hidden'}>
+        <h2>Заявки</h2>
+        <div id="entries"><div class="note">Загрузка…</div></div>
+      </div>
+
+      <div class="epane" id="p-stf"${pane === 'stf' ? '' : ' hidden'}>
+        <h2>Судьи и организаторы</h2>
+        <div id="staff"><div class="note">Загрузка…</div></div>
+      </div>` : ''}`;
 
     $('back').onclick = listEvents;
     $('ev-save').onclick = () => saveEvent(id);
-    if (id) {
-      $('up-banner').onclick = () => uploadEventImage(id, 'banner', 1600, 900);
-      $('up-mark').onclick = () => uploadEventImage(id, 'mark', 512, 512);
-      $('new-div').onclick = () => divRow(id, null);
-      renderDivs(id, ev.divisions, !!ev.feed_url);
-      loadStaff(id);
-      loadEntries(id);
-    }
+    if (!id) return;
+    $('up-banner').onclick = () => uploadEventImage(id, 'banner', 1600, 900);
+    $('up-mark').onclick = () => uploadEventImage(id, 'mark', 512, 512);
+    $('new-div').onclick = () => divRow(id, null);
+    $('new-wod').onclick = () => wodForm(id, ev.divisions, null);
+
+    // данные вкладки тянем при первом открытии, а не все сразу: сетка
+    // результатов на сотню заявок не нужна тому, кто зашёл поправить дату
+    const loaded = {};
+    const open = k => {
+      document.querySelectorAll('.etab').forEach(b => b.classList.toggle('on', b.dataset.pane === k));
+      EV_TABS.forEach(([t]) => { $('p-' + t).hidden = t !== k; });
+      if (loaded[k]) return;
+      loaded[k] = true;
+      if (k === 'div') renderDivs(id, ev.divisions, !!ev.feed_url);
+      if (k === 'wod') loadWods(id, ev.divisions);
+      if (k === 'res') loadResults(id, ev.divisions);
+      if (k === 'ent') loadEntries(id);
+      if (k === 'stf') loadStaff(id);
+    };
+    document.querySelectorAll('.etab').forEach(b => b.onclick = () => open(b.dataset.pane));
+    open(pane);
   }
 
   async function saveEvent(id) {
@@ -478,6 +553,228 @@
     };
   }
 
+  // ── Комплексы ──
+  const RTYPE = {time: 'Время', reps: 'Повторы', weight: 'Вес'};
+  const STAGE = {qualification: 'Квалификация', semifinal: 'Полуфинал', final: 'Финал'};
+
+  async function loadWods(eid, divs) {
+    const box = $('wods');
+    const list = await api(`/api/admin/events/${eid}/wods`);
+    if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+    if (!list.length) {
+      box.innerHTML = '<div class="note">Комплексов нет. Без них протокол пустой.</div>';
+      return;
+    }
+    const dname = Object.fromEntries(divs.map(d => [d.id, d.name]));
+    box.innerHTML = `<table>
+      <tr><th>#</th><th>Название</th><th>День</th><th>Этап</th><th>Результат</th>
+          <th>Кап</th><th>Категории</th><th>Баллы</th><th></th></tr>
+      ${list.map(w => `
+        <tr class="click" data-w="${w.id}">
+          <td class="num">${w.ord}</td>
+          <td><b>${esc(w.name)}</b>${w.scoring_note
+            ? `<div class="muted">${esc(w.scoring_note)}</div>` : ''}</td>
+          <td>${esc((w.day || '').slice(0, 10) || '—')}</td>
+          <td>${esc(STAGE[w.stage] || w.stage)}</td>
+          <td>${esc(RTYPE[w.result_type] || w.result_type)}</td>
+          <td>${esc(w.time_cap || '—')}</td>
+          <td>${w.divisions.length
+            ? w.divisions.map(x => `<span class="tag">${esc(dname[x] || x)}</span>`).join(' ')
+            : '<span class="tag off">все</span>'}</td>
+          <td>${w.points_table
+            ? `<span class="muted">${esc(w.points_table)}</span>` : '100 − 5×(место−1)'}</td>
+          <td><button class="btn link danger" data-del="${w.id}">Удалить</button></td>
+        </tr>`).join('')}
+    </table>`;
+    box.querySelectorAll('[data-w]').forEach(tr => tr.onclick = e => {
+      if (e.target.dataset.del) return;
+      wodForm(eid, divs, list.find(x => x.id === +tr.dataset.w));
+    });
+    box.querySelectorAll('[data-del]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (!confirm('Удалить комплекс?')) return;
+      const res = await send('/api/admin/wods/' + b.dataset.del, 'DELETE');
+      if (res.error === 'has_results') {
+        toast(`Нельзя удалить: внесено результатов — ${res.results}`); return;
+      }
+      if (res.error) { toast('Не получилось'); return; }
+      toast('Комплекс удалён'); loadWods(eid, divs);
+    });
+  }
+
+  function wodForm(eid, divs, w) {
+    w = w || {name: '', ord: 0, result_type: 'time', time_cap: '', day: '',
+              stage: 'qualification', points_table: '', scoring_note: '',
+              description: '', divisions: []};
+    const box = $('wods');
+    const prev = box.innerHTML;
+    box.innerHTML = `
+      <div class="row-between">
+        <h2>${w.id ? 'Комплекс' : 'Новый комплекс'}</h2>
+        <button class="btn quiet" id="w-back">Назад</button>
+      </div>
+      <div class="grid">
+        ${F('w-name', 'Название', w.name)}
+        ${F('w-ord', 'Порядок', w.ord, 'number')}
+        ${F('w-day', 'День', (w.day || '').slice(0, 10), 'date')}
+        <div class="f"><label for="w-stage">Этап</label><select id="w-stage">
+          ${Object.entries(STAGE).map(([k, v]) =>
+            `<option value="${k}"${w.stage === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        <div class="f"><label for="w-rt">Тип результата</label><select id="w-rt">
+          ${Object.entries(RTYPE).map(([k, v]) =>
+            `<option value="${k}"${w.result_type === k ? ' selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        ${F('w-cap', 'Лимит времени', w.time_cap, 'text', 'placeholder="12:00"')}
+        ${F('w-note', 'Тип комплекса', w.scoring_note, 'text', 'placeholder="AMRAP 12 мин"')}
+        <div class="f wide"><label for="w-pt">Баллы по местам</label>
+          <input id="w-pt" value="${esc(w.points_table)}"
+                 placeholder="пусто = 100, 95, 90… (шаг 5). Для финала: 100,90,80,70,60" />
+          <div class="muted">Через запятую, начиная с первого места.
+            Места сверх списка получают 0.</div></div>
+        <div class="f wide"><label>Категории</label>
+          <div class="checks">${divs.map(d => `
+            <label class="chk"><input type="checkbox" value="${d.id}"
+              ${w.divisions.includes(d.id) ? 'checked' : ''}> ${esc(d.name)}</label>`).join('')}
+          </div>
+          <div class="muted">Ни одной галочки — комплекс идёт у всех категорий.</div></div>
+        <div class="f wide"><label for="w-desc">Описание</label>
+          <textarea id="w-desc">${esc(w.description)}</textarea></div>
+      </div>
+      <div class="err" id="w-err" hidden></div>
+      <div class="bar"><button class="btn" id="w-save">Сохранить</button></div>`;
+
+    $('w-back').onclick = () => { box.innerHTML = prev; loadWods(eid, divs); };
+    $('w-save').onclick = async () => {
+      const body = {
+        name: $('w-name').value, ord: $('w-ord').value, day: $('w-day').value,
+        stage: $('w-stage').value, result_type: $('w-rt').value,
+        time_cap: $('w-cap').value, scoring_note: $('w-note').value,
+        points_table: $('w-pt').value, description: $('w-desc').value,
+        divisions: [...box.querySelectorAll('.checks input:checked')].map(i => +i.value),
+      };
+      const res = w.id ? await send('/api/admin/wods/' + w.id, 'PUT', body)
+                       : await send(`/api/admin/events/${eid}/wods`, 'POST', body);
+      if (res.error) {
+        const err = $('w-err');
+        err.textContent = Object.values(res.fields || {})[0] || 'Не сохранилось';
+        err.hidden = false;
+        return;
+      }
+      toast('Сохранено');
+      loadWods(eid, divs);
+    };
+  }
+
+  // ── Результаты ──
+  // Одна ячейка — один результат. Статус пишется словом прямо в поле: на площадке
+  // быстрее набрать «dnf», чем лезть в выпадающий список рядом с каждой клеткой.
+  const STATUS_WORD = {dnf: 'dnf', dns: 'dns', cap: 'cap', 'не закончил': 'dnf',
+                       'не вышел': 'dns', 'кап': 'cap'};
+
+  function parseVal(raw, type) {
+    const t = String(raw).trim().toLowerCase().replace(',', '.');
+    if (!t) return {value: null, status: 'ok'};
+    if (STATUS_WORD[t]) return {value: null, status: STATUS_WORD[t]};
+    if (type === 'time') {
+      const m = t.match(/^(\d{1,3}):([0-5]\d)$/);
+      if (m) return {value: +m[1] * 60 + +m[2], status: 'ok'};
+    }
+    if (/^\d+(\.\d+)?$/.test(t)) return {value: +t, status: 'ok'};
+    return null;                              // не разобрали
+  }
+
+  function fmtVal(v, status, type) {
+    if (status && status !== 'ok') return status.toUpperCase();
+    if (v === null || v === undefined) return '';
+    if (type === 'time') {
+      const t = Math.round(v);
+      return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+    }
+    return String(+v);
+  }
+
+  async function loadResults(eid, divs, did) {
+    const box = $('results');
+    if (!divs.length) {
+      box.innerHTML = '<div class="note">Сначала заведите категории.</div>'; return;
+    }
+    did = did || divs[0].id;
+    const g = await api(`/api/admin/events/${eid}/results?division=${did}`);
+    if (g.error) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
+
+    const picker = `<div class="grid"><div class="f"><label for="r-div">Категория</label>
+      <select id="r-div">${divs.map(d =>
+        `<option value="${d.id}"${d.id === did ? ' selected' : ''}>${esc(d.name)}</option>`
+      ).join('')}</select></div></div>`;
+
+    if (!g.wods.length || !g.rows.length) {
+      box.innerHTML = picker + `<div class="note">${!g.wods.length
+        ? 'У этой категории нет комплексов — заведите их на вкладке «Комплексы».'
+        : 'В этой категории нет заявок.'}</div>`;
+      $('r-div').onchange = e => loadResults(eid, divs, +e.target.value);
+      return;
+    }
+
+    box.innerHTML = picker + `
+      <div class="muted" style="margin:10px 0 14px">
+        Время «мм:сс», вес и повторы числом. Статус — словом: <b>dnf</b>, <b>dns</b>,
+        <b>cap</b>. Пустое поле стирает результат. Enter и стрелки ↑↓ — по столбцу,
+        Tab — по строке. Баллы и места считаются сами.
+      </div>
+      <div class="grid-res"><table>
+        <tr><th>#</th><th>Участник</th>
+          ${g.wods.map(w => `<th class="wod">${esc(w.name)}<div class="muted">${
+            esc(RTYPE[w.result_type] || w.result_type)}</div></th>`).join('')}
+          <th class="num">Сумма</th></tr>
+        ${g.rows.map(r => `
+          <tr data-e="${r.entry_id}">
+            <td class="num">${r.place}</td>
+            <td><b>${esc(r.name)}</b></td>
+            ${r.wods.map(w => `
+              <td class="cell">
+                <input class="val" data-e="${r.entry_id}" data-w="${w.wod_id}"
+                       data-t="${w.result_type}"
+                       value="${esc(fmtVal(w.value, w.status, w.result_type))}">
+                <div class="pts">${w.place ? `${w.place} место · <b>${w.points}</b>` : ''}</div>
+              </td>`).join('')}
+            <td class="num"><b>${r.points}</b></td>
+          </tr>`).join('')}
+      </table></div>`;
+
+    $('r-div').onchange = e => loadResults(eid, divs, +e.target.value);
+
+    const cells = [...box.querySelectorAll('input.val')];
+    const cols = g.wods.length;
+    cells.forEach((inp, i) => {
+      inp.onkeydown = e => {
+        const step = e.key === 'Enter' || e.key === 'ArrowDown' ? cols
+                   : e.key === 'ArrowUp' ? -cols : 0;
+        if (!step) return;
+        e.preventDefault();
+        inp.blur();
+        (cells[i + step] || inp).focus();
+      };
+      inp.onchange = async () => {
+        const parsed = parseVal(inp.value, inp.dataset.t);
+        inp.classList.remove('ok', 'bad');
+        if (!parsed) { inp.classList.add('bad'); return; }
+        const res = await send('/api/admin/results', 'POST', {
+          entry_id: +inp.dataset.e, wod_id: +inp.dataset.w,
+          value: parsed.value, status: parsed.status,
+        });
+        if (res.error) { inp.classList.add('bad'); toast('Не сохранилось'); return; }
+        inp.classList.add('ok');
+        // пересчитываем всю сетку: место и баллы соседей меняются от одной ячейки
+        const focus = [inp.dataset.e, inp.dataset.w];
+        await loadResults(eid, divs, did);
+        const back = $('results').querySelector(
+          `input.val[data-e="${focus[0]}"][data-w="${focus[1]}"]`);
+        if (back) { back.classList.add('ok'); back.focus(); back.select(); }
+      };
+    });
+  }
+
   // ── Судьи и организаторы ──
   // Назначить можно только того, кто уже открывал приложение: до этого строки
   // в users нет и роль связывать не с чем. Отдельного входа судье не заводим —
@@ -551,17 +848,27 @@
     };
   }
 
+  let entryCat = '*';
+
   async function loadEntries(eid) {
     const box = $('entries');
     const list = await api(`/api/admin/events/${eid}/entries`);
     if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
     if (!list.length) { box.innerHTML = '<div class="note">Заявок пока нет.</div>'; return; }
     const active = list.filter(x => x.status === 'active').length;
+    // фильтр по категориям: в списке на сотню заявок глазами свою группу не найти
+    const cats = [...new Set(list.map(x => x.division))].sort();
+    const shown = entryCat === '*' ? list : list.filter(x => x.division === entryCat);
     box.innerHTML = `
       <div class="sub">${active} активных из ${list.length}</div>
+      <div class="checks" style="margin-bottom:14px">
+        <button class="tag${entryCat === '*' ? ' on' : ''}" data-cat="*">Все ${list.length}</button>
+        ${cats.map(c => `<button class="tag${entryCat === c ? ' on' : ''}" data-cat="${esc(c)}">${
+          esc(c)} ${list.filter(x => x.division === c).length}</button>`).join('')}
+      </div>
       <table>
         <tr><th>Участник</th><th>Категория</th><th>Город</th><th>Подана</th><th>Статус</th><th></th></tr>
-        ${list.map(e => `
+        ${shown.map(e => `
           <tr>
             <td><b>${esc(e.team_name || e.members[0] || '—')}</b>${
               e.team_name || e.members.length > 1
@@ -576,6 +883,10 @@
               e.status === 'active' ? 'Снять' : 'Вернуть'}</button></td>
           </tr>`).join('')}
       </table>`;
+    box.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => {
+      entryCat = b.dataset.cat;
+      loadEntries(eid);
+    });
     box.querySelectorAll('[data-en]').forEach(b => b.onclick = async () => {
       const res = await send('/api/admin/entries/' + b.dataset.en, 'POST', {status: b.dataset.to});
       if (res.error) { toast('Не получилось'); return; }

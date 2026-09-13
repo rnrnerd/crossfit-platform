@@ -1341,6 +1341,54 @@ async def _division_table(c, event_id, division_id):
     return wods, entries, res, points, places
 
 
+def _protocol_rows(wods, entries, res, points, places, team_size=1, mine=None):
+    """Строки протокола с местами.
+
+    Один расчёт и на протокол у атлета, и на сетку ввода в админке: две
+    реализации неизбежно разойдутся, а разойдутся они на награждении.
+    """
+    rows = []
+    for e in entries:
+        eid = e["id"]
+        members = list(e["members"] or [])
+        per_wod = []
+        for w in wods:
+            got = res[eid].get(w["id"])
+            per_wod.append({
+                "wod_id": w["id"], "name": w["name"], "result_type": w["result_type"],
+                "value": got["value"] if got else None,
+                "tiebreak": got["tiebreak"] if got else None,
+                "status": got["status"] if got else "",
+                "place": places[eid].get(w["id"]),
+                "points": points[eid].get(w["id"], 0),
+            })
+        rows.append({
+            "entry_id": eid,
+            "is_me": bool(mine and mine == eid),
+            "name": e["team_name"] or (members[0] if members else "Без имени"),
+            "members": members if team_size > 1 else [],
+            "avatar": (f"/api/photo/{e['photo_user']}?v={e['photo_v']}"
+                       if e["photo_user"] else ""),
+            "points": sum(points[eid].values()),
+            "wods": per_wod,
+        })
+
+    # При равной сумме выше тот, у кого лучше места: сравниваем отсортированные
+    # списки мест, при равенстве — следующее место
+    def rank_key(x):
+        return (-x["points"], sorted(w["place"] for w in x["wods"] if w["place"]))
+
+    rows.sort(key=rank_key)
+    # место в протоколе: равная сумма и равные места делят одну строку
+    place, prev = 0, None
+    for i, x in enumerate(rows):
+        k = rank_key(x)
+        if k != prev:
+            place, prev = i + 1, k
+        x["place"] = place
+    return rows
+
+
 async def h_leaderboard(r):
     """Протокол дивизиона. Без дивизиона считать нечего: у каждого свой набор
     комплексов, а место имеет смысл только внутри своей группы."""
@@ -1367,47 +1415,8 @@ async def h_leaderboard(r):
         mine = await _my_entry(c, eid, me["id"]) if me else None
         mine_entry = mine["id"] if mine else None
 
-        rows = []
-        for e in entries:
-            eid_ = e["id"]
-            members = list(e["members"] or [])
-            per_wod = []
-            for w in wods:
-                got = res[eid_].get(w["id"])
-                per_wod.append({
-                    "wod_id": w["id"], "name": w["name"], "result_type": w["result_type"],
-                    "value": got["value"] if got else None,
-                    "tiebreak": got["tiebreak"] if got else None,
-                    "status": got["status"] if got else "",
-                    "place": places[eid_].get(w["id"]),
-                    "points": points[eid_].get(w["id"], 0),
-                })
-            rows.append({
-                "entry_id": eid_,
-                "is_me": bool(mine_entry and mine_entry == eid_),
-                "name": e["team_name"] or (members[0] if members else "Без имени"),
-                "members": members if d["team_size"] > 1 else [],
-                "avatar": f"/api/photo/{e['photo_user']}?v={e['photo_v']}" if e["photo_user"] else "",
-                "points": sum(points[eid_].values()),
-                "wods": per_wod,
-            })
-
-        # При равной сумме выше тот, у кого лучше места: сравниваем
-        # отсортированные списки мест, при равенстве — следующее место
-        def rank_key(x):
-            best = sorted(w["place"] for w in x["wods"] if w["place"])
-            return (-x["points"], best)
-
-        rows.sort(key=rank_key)
-        # место в протоколе: равная сумма и равные места делят одну строку
-        place = 0
-        prev = None
-        for i, x in enumerate(rows):
-            k = rank_key(x)
-            if k != prev:
-                place = i + 1
-                prev = k
-            x["place"] = place
+        rows = _protocol_rows(wods, entries, res, points, places,
+                              d["team_size"], mine_entry)
 
         done = sum(1 for w in wods
                    if any(res[e["id"]].get(w["id"]) for e in entries))
@@ -2131,6 +2140,200 @@ async def a_staff_delete(r):
     return _json({"ok": True})
 
 
+# ── Турнир: комплексы и результаты ────────────────────────────────────
+# Второй источник правды по протоколу не заводим: сетка в админке пишет
+# в те же `results`, а считает тем же `_protocol_rows`, что и экран атлета.
+
+RESULT_TYPES = ("time", "reps", "weight")
+WOD_STAGES = ("qualification", "semifinal", "final")
+
+
+def _wod_out(w, div_ids):
+    return {
+        "id": w["id"], "name": w["name"], "description": w["description"],
+        "ord": w["ord"], "result_type": w["result_type"], "time_cap": w["time_cap"],
+        "day": str(w["day"] or ""), "stage": w["stage"],
+        "points_table": w["points_table"], "scoring_note": w["scoring_note"],
+        "divisions": div_ids,
+    }
+
+
+async def a_wods(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        wods = await c.fetch(
+            "SELECT * FROM wods WHERE event_id=$1 ORDER BY ord, id", eid)
+        links = await c.fetch(
+            """SELECT wd.wod_id, wd.division_id FROM wod_divisions wd
+               JOIN wods w ON w.id = wd.wod_id WHERE w.event_id=$1""", eid)
+    by_wod = {}
+    for x in links:
+        by_wod.setdefault(x["wod_id"], []).append(x["division_id"])
+    return _json([_wod_out(w, by_wod.get(w["id"], [])) for w in wods])
+
+
+async def a_wod_save(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_json"}, status=400)
+    wid = r.match_info.get("wid")
+    name = _clean(body.get("name"), 120)
+    if len(name) < 2:
+        return _json({"error": "invalid", "fields": {"name": "Нужно название"}}, status=400)
+    rtype = str(body.get("result_type") or "time")
+    if rtype not in RESULT_TYPES:
+        return _json({"error": "invalid", "fields": {"result_type": "Неизвестный тип"}},
+                     status=400)
+    stage = str(body.get("stage") or "qualification")
+    if stage not in WOD_STAGES:
+        stage = "qualification"
+    try:
+        day = _date(body.get("day"))
+    except ValueError as e:
+        return _json({"error": "invalid", "fields": {"day": str(e)}}, status=400)
+    try:
+        ordv = max(0, min(999, int(body.get("ord") or 0)))
+    except (TypeError, ValueError):
+        ordv = 0
+    # шкалу баллов храним как ввели, но проверяем, что она вообще читается
+    ptable = _clean(body.get("points_table"), 400)
+    if ptable and not parse_points_table(ptable):
+        return _json({"error": "invalid",
+                      "fields": {"points_table": "Нужны числа через запятую"}}, status=400)
+    vals = (name, str(body.get("description") or "")[:4000], ordv, rtype,
+            _clean(body.get("time_cap"), 20), day, stage, ptable,
+            _clean(body.get("scoring_note"), 120))
+    divs = [int(x) for x in (body.get("divisions") or []) if str(x).isdigit()]
+
+    async with db_pool.acquire() as c:
+        if wid:
+            row = await c.fetchrow(
+                """UPDATE wods SET name=$2, description=$3, ord=$4, result_type=$5,
+                        time_cap=$6, day=$7, stage=$8, points_table=$9, scoring_note=$10
+                   WHERE id=$1 RETURNING id, event_id""", int(wid), *vals)
+            if not row:
+                return _json({"error": "not_found"}, status=404)
+            new_id, eid = row["id"], row["event_id"]
+        else:
+            try:
+                eid = int(r.match_info["id"])
+            except ValueError:
+                return _json({"error": "bad_id"}, status=404)
+            new_id = await c.fetchval(
+                """INSERT INTO wods (event_id, name, description, ord, result_type,
+                        time_cap, day, stage, points_table, scoring_note)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id""", eid, *vals)
+        # пустой список категорий = комплекс для всех: так его понимает и протокол
+        await c.execute("DELETE FROM wod_divisions WHERE wod_id=$1", new_id)
+        if divs:
+            await c.executemany(
+                """INSERT INTO wod_divisions (wod_id, division_id)
+                   SELECT $1, $2 WHERE EXISTS
+                       (SELECT 1 FROM divisions WHERE id=$2 AND event_id=$3)""",
+                [(new_id, d, eid) for d in divs])
+    logger.info("Админка: комплекс %s сохранён", new_id)
+    return _json({"ok": True, "id": new_id})
+
+
+async def a_wod_delete(r):
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        wid = int(r.match_info["wid"])
+    except ValueError:
+        return _json({"error": "bad_id"}, status=404)
+    async with db_pool.acquire() as c:
+        got = await c.fetchval("SELECT COUNT(*) FROM results WHERE wod_id=$1", wid)
+        if got:
+            return _json({"error": "has_results", "results": got}, status=409)
+        await c.execute("DELETE FROM wods WHERE id=$1", wid)
+    return _json({"ok": True})
+
+
+async def a_results(r):
+    """Сетка ввода: заявки дивизиона × комплексы, с баллами и местами."""
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        eid = int(r.match_info["id"])
+        did = int(r.query.get("division", ""))
+    except ValueError:
+        return _json({"error": "division_required"}, status=400)
+    async with db_pool.acquire() as c:
+        d = await c.fetchrow(
+            "SELECT id, name, team_size FROM divisions WHERE id=$1 AND event_id=$2",
+            did, eid)
+        if not d:
+            return _json({"error": "division_not_found"}, status=404)
+        wods, entries, res, points, places = await _division_table(c, eid, did)
+        rows = _protocol_rows(wods, entries, res, points, places, d["team_size"])
+        # Места считаем протоколом, а показываем по алфавиту: в сетке ввода
+        # строки не должны прыгать из-под рук после каждой ячейки — оператор
+        # идёт по заходу сверху вниз, а не по турнирной таблице.
+        rows.sort(key=lambda x: x["name"].lower())
+    return _json({
+        "division": {"id": d["id"], "name": d["name"], "team_size": d["team_size"]},
+        "wods": [{"id": w["id"], "name": w["name"], "ord": w["ord"],
+                  "result_type": w["result_type"], "time_cap": w["time_cap"]}
+                 for w in wods],
+        "rows": rows,
+    })
+
+
+async def a_result_save(r):
+    """Одна ячейка сетки. Пустое значение без статуса — стереть результат."""
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        body = await r.json()
+        entry_id, wod_id = int(body["entry_id"]), int(body["wod_id"])
+    except (Exception, KeyError):
+        return _json({"error": "bad_request"}, status=400)
+    status = str(body.get("status") or "ok")
+    if status not in ("ok", "dnf", "dns", "cap"):
+        return _json({"error": "bad_status"}, status=400)
+
+    def num(key):
+        v = body.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return "bad"
+
+    value, tiebreak = num("value"), num("tiebreak")
+    if value == "bad" or tiebreak == "bad":
+        return _json({"error": "bad_value"}, status=400)
+
+    async with db_pool.acquire() as c:
+        if value is None and status == "ok":
+            await c.execute(
+                "DELETE FROM results WHERE entry_id=$1 AND wod_id=$2", entry_id, wod_id)
+            return _json({"ok": True, "cleared": True})
+        ok = await c.fetchval(
+            """SELECT 1 FROM entries en JOIN wods w ON w.event_id = en.event_id
+               WHERE en.id=$1 AND w.id=$2""", entry_id, wod_id)
+        if not ok:
+            return _json({"error": "not_found"}, status=404)
+        await c.execute(
+            """INSERT INTO results (entry_id, wod_id, value, tiebreak, status, judged_at)
+               VALUES ($1,$2,$3,$4,$5,NOW())
+               ON CONFLICT (entry_id, wod_id) DO UPDATE
+                   SET value=EXCLUDED.value, tiebreak=EXCLUDED.tiebreak,
+                       status=EXCLUDED.status, judged_at=NOW()""",
+            entry_id, wod_id, value, tiebreak, status)
+    return _json({"ok": True})
+
+
 async def a_entry_status(r):
     if not _admin_ok(r):
         return _need_admin()
@@ -2365,6 +2568,12 @@ def build_web_app():
     app.router.add_post("/api/admin/events/{id}/image", a_event_image)
     app.router.add_get("/api/admin/events/{id}/entries", a_entries)
     app.router.add_get("/api/admin/users", a_users)
+    app.router.add_get("/api/admin/events/{id}/wods", a_wods)
+    app.router.add_post("/api/admin/events/{id}/wods", a_wod_save)
+    app.router.add_put("/api/admin/wods/{wid}", a_wod_save)
+    app.router.add_delete("/api/admin/wods/{wid}", a_wod_delete)
+    app.router.add_get("/api/admin/events/{id}/results", a_results)
+    app.router.add_post("/api/admin/results", a_result_save)
     app.router.add_get("/api/admin/events/{id}/staff", a_staff)
     app.router.add_post("/api/admin/events/{id}/staff", a_staff_save)
     app.router.add_delete("/api/admin/events/{id}/staff/{uid}", a_staff_delete)
