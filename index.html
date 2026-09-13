@@ -1922,7 +1922,7 @@
       // Работа на старте — отдельный список: судья приходит сюда не за своей
       // заявкой, а за своим стартом, и путать одно с другим нельзя.
       const staff = me.staff_of || [];
-      if (!list.length && !staff.length) {
+      if (!list.length && !staff.length && !me.is_organizer) {
         box.innerHTML = '<div class="note">Вы пока никуда не заявлены.<br>Выберите старт на главной или в поиске.</div>';
         return;
       }
@@ -1950,15 +1950,17 @@
 
       // Организатору нужен десктоп: карточка, категории, комплексы и заходы
       // на телефоне не заводятся. Ссылка короткая, дальше сессия на 12 часов.
-      const isOrg = staff.some(e => e.role === 'organizer');
+      // не по списку выше: он показывает только предстоящее, а войти
+      // нужно и после старта — поправить результат или доотметить оплату
+      const isOrg = !!me.is_organizer;
       const admin = !isOrg ? '' : `
         <div class="pad" style="padding-top:14px">
           <button class="btn quiet" id="go-admin">Открыть админку</button>
           <div class="note" style="padding:10px 0 0">Откроется в браузере.
             Там заводятся категории, комплексы, заходы и расписание.</div>
         </div>`;
-      box.innerHTML = staff.length
-        ? `<div class="h">Работа на стартах</div>${staffRows}${admin}
+      box.innerHTML = (staff.length || isOrg)
+        ? `${staffRows ? '<div class="h">Работа на стартах</div>' + staffRows : ''}${admin}
            <div class="h">Мои заявки</div>${entryRows
              || '<div class="note">Вы пока никуда не заявлены.</div>'}`
         : entryRows;

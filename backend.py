@@ -459,6 +459,12 @@ async def h_me(r):
                FROM event_staff s JOIN events e ON e.id = s.event_id
                WHERE s.user_id=$1 AND e.status <> 'finished'
                ORDER BY e.date_start NULLS LAST""", u["id"])
+        # Отдельно от списка выше: тот показывает только предстоящее, а вход
+        # в админку нужен и после старта — поправить результат, доотметить
+        # оплату, выгрузить протокол.
+        is_organizer = bool(await c.fetchval(
+            """SELECT 1 FROM event_staff
+               WHERE user_id=$1 AND role='organizer' LIMIT 1""", u["id"]))
         club = await c.fetchval(
             "SELECT name FROM clubs WHERE id=$1", u["club_id"]) if u.get("club_id") else None
     return _json({
@@ -470,6 +476,7 @@ async def h_me(r):
             "reg_closes_at": str(x["reg_closes_at"] or ""),
             "has_mark": bool(x["mark_v"]),
         } for x in my_entries],
+        "is_organizer": is_organizer,
         "staff_of": [dict(x) | {
             "date_start": str(x["date_start"] or ""),
             "date_end": str(x["date_end"] or ""),
@@ -1945,7 +1952,8 @@ async def h_admin_link(r):
         return _json({"error": "not_organizer"}, status=403)
     # WEBAPP_URL задан на боевом стенде; локально берём адрес из самого запроса,
     # иначе ссылка выйдет относительной и Telegram её не откроет
-    base = (WEBAPP_URL or str(r.url.origin())).rstrip("/")
+    # r.url.origin() спотыкается о порт в Host, поэтому собираем сами
+    base = (WEBAPP_URL or f"{r.scheme}://{r.headers.get('Host', '')}").rstrip("/")
     return _json({"url": f"{base}/admin#t={_sign('l', u['id'], LINK_TTL)}"})
 
 
