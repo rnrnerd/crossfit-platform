@@ -449,6 +449,9 @@
     .lb-detail { display:none; padding:2px var(--pad) 14px; }
     .lb-item.open .lb-detail { display:block; }
     .lb-item.open .lb-row { box-shadow:none; }
+    /* Раскрытие гасило тень строки вместе с полосой «это вы» — своя строка
+       переставала быть своей ровно в тот момент, когда её и открывают. */
+    .lb-item.open .lb-row.is-me { box-shadow:inset 3px 0 0 var(--accent); }
     .lb-item.open { box-shadow:inset 0 -1px 0 var(--hair); }
     /* Раскрытая строка — маленькая таблица, а не фраза через точки:
        результат, место и баллы сравнивают по вертикали между комплексами,
