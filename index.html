@@ -151,10 +151,17 @@
        а не залитая: четыре плотных пятна рядом с афишей спорили бы с ней.
        Оттенки взяты в стороне от --live и --accent — красный сигнал «идёт
        сейчас» и фирменный лайм должны остаться узнаваемыми. */
-    .tag.lv-bg    { color:#4ec97a; background:rgba(78,201,122,.15); }
-    .tag.lv-inter { color:#4a9df0; background:rgba(74,157,240,.15); }
-    .tag.lv-rx    { color:#f5a03c; background:rgba(245,160,60,.15); }
-    .tag.lv-elite { color:#ef4a52; background:rgba(239,74,82,.15); }
+    .lv-bg    { color:#4ec97a; }
+    .lv-inter { color:#4a9df0; }
+    .lv-rx    { color:#f5a03c; }
+    .lv-elite { color:#ef4a52; }
+    .tag.lv-bg    { background:rgba(78,201,122,.15); }
+    .tag.lv-inter { background:rgba(74,157,240,.15); }
+    .tag.lv-rx    { background:rgba(245,160,60,.15); }
+    .tag.lv-elite { background:rgba(239,74,82,.15); }
+    /* Недоступный вариант гаснет целиком: цветное слово внутри погашенной
+       строки читалось бы как активное. */
+    .opt[disabled] .opt-name span { color:inherit; }
     .tag-price { flex:none; font-size:13px; color:var(--steel); }
     .tags.sm { margin-top:8px; }
     .tags.sm .tag { font-size:10px; padding:3px 6px; }
@@ -224,8 +231,8 @@
     .hero-value.long  { font-size:30px; letter-spacing:-.03em; }
     .hero-value.xlong { font-size:24px; letter-spacing:-.02em; }
     /* Стоимость — одной строкой под главным фактом. Цену сравнивают до того,
-       как выбирают дивизион, поэтому она стоит наверху, а не в строчке каждой
-       категории; точная цена выбранного дивизиона называется в шторке заявки. */
+       как выбирают категорию, поэтому она стоит наверху, а не в строчке каждой
+       из них; точную цену выбранной категории называет шторка заявки. */
     .hero-fee { display:flex; gap:8px; margin-top:12px; font-size:15px; color:var(--steel); }
     .hero-fee span { font-weight:600; color:var(--chalk); }
 
@@ -241,13 +248,14 @@
       display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
     .h span { font-size:13px; font-weight:400; color:var(--steel); }
     .h.tight { padding-bottom:2px; }
-    /* Заголовок-раскрывашка. Дивизионов бывает пять, и развёрнутый список
+    /* Заголовок-раскрывашка. Категорий бывает пять, и развёрнутый список
        отодвигает даты и организатора за пределы экрана. Счётчик виден
        свёрнутым — иначе непонятно, что там спрятано и стоит ли открывать. */
     .h-toggle { width:100%; border:none; background:none; color:var(--chalk);
       font-family:inherit; text-align:left; cursor:pointer; }
     .h-toggle:active { background:rgba(255,255,255,.05); }
-    .h-side { display:flex; align-items:center; gap:10px; }
+    .h-side { display:flex; align-items:center; gap:10px; min-width:0; }
+    .h-sum { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .h-side svg { transition:transform .15s; }
     .h-toggle[aria-expanded="true"] .h-side svg { transform:rotate(180deg); }
 
@@ -362,7 +370,7 @@
     /* ── Турнирный слой ── */
     .segs.sticky { position:sticky; top:var(--bar); z-index:9; background:var(--void); }
 
-    /* строка выбора дивизиона + прогресс комплексов */
+    /* строка выбора категории + прогресс комплексов */
     .pick { display:flex; align-items:center; justify-content:space-between; gap:12px;
       padding:14px var(--pad) 10px; }
     .pick button { display:flex; align-items:center; gap:7px; background:none; border:none;
@@ -597,11 +605,11 @@
     const REASONS = {
       profile_incomplete:   'Сначала заполните имя и пол в профиле.',
       registration_closed:  'Регистрация на этот старт уже закрыта.',
-      division_not_found:   'Этот дивизион больше не доступен. Обновите экран.',
-      team_division:        'В командный дивизион заявку подаёт капитан — пока только через организатора.',
-      gender_mismatch:      'Этот дивизион для другого пола.',
+      division_not_found:   'Эта категория больше недоступна. Обновите экран.',
+      team_division:        'В командную категорию заявку подаёт капитан — пока только через организатора.',
+      gender_mismatch:      'Эта категория для другого пола.',
       already_registered:   'Вы уже заявлены на этот старт.',
-      division_full:        'В дивизионе не осталось мест.',
+      division_full:        'В категории не осталось мест.',
       too_late:             'Снять заявку можно только пока идёт регистрация.',
       no_entry:             'Заявки на этот старт у вас нет.',
       unauthorized:         'Откройте приложение через Telegram.',
@@ -732,6 +740,27 @@
 
     // Порядок фиксированный, от простого к сильному — не алфавитный
     const LEVELS = [['bg','Bg'], ['inter','Inter'], ['rx','Rx'], ['elite','Elite']];
+
+    // Уровень внутри названия категории красим тем же цветом, что и плашку
+    // в ленте: у «Rx Мужчины» цветной только «Rx», пол остаётся обычным текстом.
+    // Ищем слово по словарю, а не отрезаем первое слово названия: название
+    // пишет организатор, и порядок слов у него свой. Слово не нашлось —
+    // красить нечего, показываем как есть.
+    const LEVEL_WORDS = {
+      bg:    ['Beginners', 'Bg'],
+      inter: ['Intermediate', 'Inter', 'Scaled'],
+      rx:    ['Rx'],
+      elite: ['Elite'],
+    };
+    function paintLevel(name, level) {
+      for (const w of LEVEL_WORDS[level] || []) {
+        const m = name.match(new RegExp(`\\b${w}\\b`, 'i'));
+        if (m) return esc(name.slice(0, m.index))
+          + `<span class="lv-${level}">${esc(m[0])}</span>`
+          + esc(name.slice(m.index + m[0].length));
+      }
+      return esc(name);
+    }
     function tagsRow(ev, small) {
       const set = LEVELS.filter(([k]) => (ev.levels || []).includes(k))
         .map(([k, label]) => `<span class="tag lv-${k}">${label}</span>`).join('');
@@ -1100,31 +1129,36 @@
       const place = [ev.city, ev.venue].filter(Boolean).join(', ');
 
       // Личный зачёт — умолчание, и подписывать его в каждой строке незачем.
-      // Отмечаем только исключение: командный дивизион и размер команды.
+      // Отмечаем только исключение: командная категория и размер команды.
       const list = ev.divisions || [];
       const divs = list.map(d => `
         <div class="row">
-          <div class="row-main">${esc(d.name)}</div>
+          <div class="row-main">${paintLevel(d.name, d.level)}</div>
           ${d.team_size > 1
             ? `<div class="row-val q">Команда, ${d.team_size} чел.</div>` : ''}
         </div>`).join('');
 
       const chev = `<svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke="currentColor"
              stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>`;
-      // Один дивизион — это не выбор, прятать его под раскрывашку не за чем
+      // Одна категория — это не выбор, прятать её под раскрывашку не за чем
       const divBlock = !list.length
-        ? '<div class="h">Дивизионы</div><div class="note">Дивизионы пока не объявлены.</div>'
+        ? '<div class="h">Категории</div><div class="note">Категории пока не объявлены.</div>'
         : list.length === 1
-          ? `<div class="h">Дивизионы</div><div class="rows">${divs}</div>`
-          : `<button class="h h-toggle" id="divs-toggle" aria-expanded="false"
-                     aria-controls="divs-list">Дивизионы<span class="h-side">${
+          ? `<div class="h">Категории</div><div class="rows">${divs}</div>`
+          : `<button class="h h-toggle" aria-expanded="false"
+                     aria-controls="divs-list">Категории<span class="h-side">${
                        list.length}${chev}</span></button>
              <div class="rows" id="divs-list" hidden>${divs}</div>`;
 
-      // Регистрация уехала в главный факт — здесь её уже не повторяем
+      // Регистрация уехала в главный факт — здесь её уже не повторяем.
+      // Отбор идёт раньше очных дней, поэтому стоит первым. «Финал» — только
+      // когда отбор есть: у турнира без отбора очные дни это всё соревнование,
+      // а не его финальная часть.
+      const mainDates = fmtDates(ev.date_start, ev.date_end);
+      const qualDates = fmtDates(ev.qual_start, ev.qual_end);
       const dates = [
-        ['Соревнование', fmtDates(ev.date_start, ev.date_end)],
-        ['Онлайн-отбор', fmtDates(ev.qual_start, ev.qual_end)],
+        ['Онлайн-отбор', qualDates],
+        [qualDates ? 'Финал' : 'Соревнование', mainDates],
       ].filter(([, v]) => v).map(([k, v]) =>
         `<div class="row"><div class="row-main">${esc(k)}</div><div class="row-val num">${esc(v)}</div></div>`).join('');
 
@@ -1156,21 +1190,23 @@
 
         ${divBlock}
 
-        ${dates ? `<div class="h">Даты</div><div class="rows">${dates}</div>` : ''}
+        ${dates ? `<button class="h h-toggle" aria-expanded="false"
+              aria-controls="dates-list">Даты проведения<span class="h-side"><span
+              class="h-sum">${esc(mainDates || qualDates)}</span>${chev}</span></button>
+            <div class="rows" id="dates-list" hidden>${dates}</div>` : ''}
         ${links ? `<div class="h">Организатор</div><div class="pad links">${links}</div>` : ''}
         <div style="height:32px"></div>`;
 
       wireActions(ev);
-      const dt = $('divs-toggle');
-      if (dt) dt.onclick = () => {
-        const open = dt.getAttribute('aria-expanded') === 'true';
-        dt.setAttribute('aria-expanded', String(!open));
-        $('divs-list').hidden = open;
-      };
+      box.querySelectorAll('.h-toggle').forEach(t => t.onclick = () => {
+        const open = t.getAttribute('aria-expanded') === 'true';
+        t.setAttribute('aria-expanded', String(!open));
+        $(t.getAttribute('aria-controls')).hidden = open;
+      });
     }
 
     // Стоимость участия одной цифрой. «от» появляется, только когда цены
-    // дивизионов расходятся; бесплатный дивизион рядом с платными «от» описать
+    // категорий расходятся; бесплатная категория рядом с платными «от» описать
     // нельзя, поэтому там честный диапазон.
     function feeLine(ev) {
       const p = (ev.divisions || []).map(d => d.price)
@@ -1208,9 +1244,9 @@
     async function loadProtocol(ev) {
       const box = $('event-body');
       const divs = ev.divisions || [];
-      if (!divs.length) { box.innerHTML = '<div class="note">Дивизионы не заданы.</div>'; return; }
+      if (!divs.length) { box.innerHTML = '<div class="note">Категории не заданы.</div>'; return; }
       if (!lbDiv || !divs.some(d => d.id === lbDiv)) {
-        // по умолчанию — свой дивизион: атлет открывает протокол ради своей строки
+        // по умолчанию — своя категория: атлет открывает протокол ради своей строки
         lbDiv = ev.my_entry ? ev.my_entry.division_id : divs[0].id;
       }
       box.innerHTML = `<div class="pick"><button id="lb-pick">
@@ -1224,11 +1260,11 @@
 
     function pickDivisionFor(ev) {
       openSheet(`
-        <h3>Дивизион</h3>
-        <div role="radiogroup" aria-label="Дивизион">
+        <h3>Категория</h3>
+        <div role="radiogroup" aria-label="Категория">
           ${(ev.divisions || []).map(d => `
             <button class="opt" role="radio" data-id="${d.id}" aria-checked="${d.id === lbDiv}">
-              <div class="opt-name">${esc(d.name)}</div><i class="tick"></i>
+              <div class="opt-name">${paintLevel(d.name, d.level)}</div><i class="tick"></i>
             </button>`).join('')}
         </div>
         <div class="sheet-foot"><button class="btn text" id="sh-close">Закрыть</button></div>`,
@@ -1258,7 +1294,7 @@
         ? `${d.wods_done} из ${d.wods_total} ${plural(d.wods_total,'комплекса','комплексов','комплексов')}`
         : '';
       if (!d.rows.length) {
-        body.innerHTML = '<div class="note">В этом дивизионе пока нет заявок.</div>';
+        body.innerHTML = '<div class="note">В этой категории пока нет заявок.</div>';
         return;
       }
       body.innerHTML = d.rows.map(r => {
@@ -1330,7 +1366,7 @@
       box.innerHTML = list.map(w => {
         const meta = [STAGE_LABEL[w.stage] || '', RES_LABEL[w.result_type] || '',
                       w.time_cap ? `крышка ${w.time_cap}` : ''].filter(Boolean).join(', ');
-        const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все дивизионы';
+        const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все категории';
         return `
         <div class="acc" data-id="${w.id}">
           <button class="acc-head">
@@ -1479,7 +1515,7 @@
       if (pr)  pr.onclick  = () => show('profile');
     }
 
-    // Почему в дивизион нельзя — говорим до нажатия, а не после
+    // Почему в категорию нельзя — говорим до нажатия, а не после
     function blockedReason(ev, d) {
       if (d.team_size > 1) return 'Командный';
       if (d.gender_rule === 'male'   && me?.user?.gender !== 'М') return 'Только мужчины';
@@ -1498,7 +1534,7 @@
         <button class="opt" role="radio" aria-checked="false" data-id="${d.id}"
                 data-price="${d.price}" ${why ? 'disabled' : ''}>
           <div>
-            <div class="opt-name">${esc(d.name)}</div>
+            <div class="opt-name">${paintLevel(d.name, d.level)}</div>
             <div class="opt-sub">${esc(sub)}</div>
           </div>
           ${why ? `<div class="opt-why">${esc(why)}</div>` : '<i class="tick"></i>'}
@@ -1506,11 +1542,11 @@
       }).join('');
 
       openSheet(`
-        <h3>Выбор дивизиона</h3>
+        <h3>Выбор категории</h3>
         <p>${esc(ev.title)}</p>
-        <div role="radiogroup" aria-label="Дивизион">${rows}</div>
+        <div role="radiogroup" aria-label="Категория">${rows}</div>
         <div class="sheet-foot">
-          <button class="btn" id="sh-go" disabled>Выберите дивизион</button>
+          <button class="btn" id="sh-go" disabled>Выберите категорию</button>
           <button class="btn text" id="sh-cancel">Отмена</button>
         </div>`, trigger);
 

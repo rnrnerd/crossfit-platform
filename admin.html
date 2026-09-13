@@ -330,14 +330,14 @@
       </div>
 
       <div class="row-between" style="margin-top:34px">
-        <h2>Дивизионы</h2><button class="btn quiet" id="new-div">Добавить</button>
+        <h2>Категории</h2><button class="btn quiet" id="new-div">Добавить</button>
       </div>
       <div id="divs"></div>
 
       ${ev.feed_url ? `<div class="warn"><b>Турнир ведётся во внешнем модуле.</b>
-        Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы дивизион
+        Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы категория
         попал в протокол, заполните у него «Категория в модуле» и «Пол в модуле» —
-        модуль знает не дивизион, а пару «категория + пол».</div>` : ''}
+        модуль знает не её, а пару «категория + пол» в своих терминах.</div>` : ''}
 
       <div class="row-between" style="margin-top:34px"><h2>Заявки</h2></div>
       <div id="entries"><div class="note">Загрузка…</div></div>
@@ -377,7 +377,7 @@
     }
     toast('Сохранено');
     // новое событие получает id только после сохранения — открываем его заново,
-    // иначе картинки и дивизионы некуда прикреплять
+    // иначе картинки и категории некуда прикреплять
     if (!id) editEvent(res.id); else $('ev-err').hidden = true;
   }
 
@@ -393,7 +393,7 @@
 
   function renderDivs(eid, divs, feed) {
     $('divs').innerHTML = !divs.length
-      ? '<div class="note">Дивизионов нет. Без них нельзя подать заявку.</div>'
+      ? '<div class="note">Категорий нет. Без них нельзя подать заявку.</div>'
       : `<table>
           <tr><th>Название</th><th>Уровень</th><th>Состав</th><th>Пол</th>
               <th class="num">Цена</th><th class="num">Лимит</th>
@@ -419,10 +419,10 @@
     $('divs').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
       const res = await send('/api/admin/divisions/' + b.dataset.del, 'DELETE');
       if (res.error === 'has_entries') {
-        toast(`Нельзя удалить: в дивизионе ${res.entries} заявок`); return;
+        toast(`Нельзя удалить: в категории ${res.entries} заявок`); return;
       }
       if (res.error) { toast('Не удалилось'); return; }
-      toast('Дивизион удалён'); editEvent(eid);
+      toast('Категория удалена'); editEvent(eid);
     });
   }
 
@@ -433,7 +433,7 @@
     const prev = m.innerHTML;
     m.innerHTML = `
       <div class="row-between">
-        <h2>${d.id ? 'Дивизион' : 'Новый дивизион'}</h2>
+        <h2>${d.id ? 'Категория' : 'Новая категория'}</h2>
         <button class="btn quiet" id="d-back">Назад</button>
       </div>
       <div class="grid">
@@ -483,7 +483,7 @@
     box.innerHTML = `
       <div class="sub">${active} активных из ${list.length}</div>
       <table>
-        <tr><th>Участник</th><th>Дивизион</th><th>Город</th><th>Подана</th><th>Статус</th><th></th></tr>
+        <tr><th>Участник</th><th>Категория</th><th>Город</th><th>Подана</th><th>Статус</th><th></th></tr>
         ${list.map(e => `
           <tr>
             <td><b>${esc(e.team_name || e.members[0] || '—')}</b>${
