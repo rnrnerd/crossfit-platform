@@ -1865,6 +1865,22 @@ async def a_event_one(r):
             return _json({"error": "not_found"}, status=404)
         divs = await c.fetch(
             "SELECT * FROM divisions WHERE event_id=$1 ORDER BY ord, id", eid)
+        # Готовность события: чем оно наполнено. Интерфейс у всех стартов
+        # одинаковый, расходится только заполненность — и её надо показать
+        # оператору списком, а не оставлять «догадайся, чего не хватает».
+        ready = await c.fetchrow(
+            """SELECT
+                 (SELECT COUNT(*) FROM wods WHERE event_id=$1)     AS wods,
+                 (SELECT COUNT(*) FROM heats WHERE event_id=$1)    AS heats,
+                 (SELECT COUNT(*) FROM schedule WHERE event_id=$1) AS schedule,
+                 (SELECT COUNT(*) FROM entries WHERE event_id=$1
+                    AND status='active')                           AS entries,
+                 (SELECT COUNT(*) FROM event_staff WHERE event_id=$1
+                    AND role='organizer')                          AS organizers,
+                 (SELECT COUNT(*) FROM event_staff WHERE event_id=$1
+                    AND role='judge')                              AS judges,
+                 (SELECT COUNT(*) FROM results rs JOIN wods w ON w.id = rs.wod_id
+                    WHERE w.event_id=$1)                           AS results""", eid)
     out = {k: (str(ev[k]) if isinstance(ev[k], date) else ev[k])
            for k in ("id", "slug", "title", "description", "city", "venue", "status",
                      "visibility", "telegram", "instagram", "feed_url") + EVENT_DATES}
@@ -1872,6 +1888,7 @@ async def a_event_one(r):
         out[k] = str(ev[k] or "")
     out["has_banner"] = bool(ev["banner_v"])
     out["has_mark"] = bool(ev["mark_v"])
+    out["ready"] = dict(ready)
     out["divisions"] = [{
         "id": d["id"], "name": d["name"], "team_size": d["team_size"],
         "gender_rule": d["gender_rule"], "level": d["level"], "price": d["price"],
@@ -2104,11 +2121,13 @@ async def a_staff_save(r):
     async with db_pool.acquire() as c:
         if not await c.fetchval("SELECT 1 FROM users WHERE id=$1", uid):
             return _json({"error": "no_user"}, status=404)
+        first = role == "organizer" and not await c.fetchval(
+            "SELECT 1 FROM event_staff WHERE event_id=$1 AND role='organizer'", eid)
         await c.execute(
-            """INSERT INTO event_staff (event_id, user_id, role)
-               VALUES ($1,$2,$3)
+            """INSERT INTO event_staff (event_id, user_id, role, is_creator)
+               VALUES ($1,$2,$3,$4)
                ON CONFLICT (event_id, user_id) DO UPDATE SET role = EXCLUDED.role""",
-            eid, uid, role)
+            eid, uid, role, bool(first))
     logger.info("Админка: %s назначен на событие %s как %s", uid, eid, role)
     return _json({"ok": True})
 

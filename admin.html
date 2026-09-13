@@ -94,6 +94,19 @@
     .chk { display:inline-flex; align-items:center; gap:7px; background:var(--plate2);
       border-radius:8px; padding:8px 11px; font-size:14px; cursor:pointer; }
     .chk input { accent-color:var(--accent); }
+    /* Готовность старта. Экраны у всех событий одинаковые, различается только
+       наполнение — список показывает, чего не хватает, и ведёт туда, где это
+       заводится. Иначе неполнота обнаруживается в день соревнования. */
+    .ready { display:grid; gap:2px; margin:18px 0 6px; }
+    .ready a { display:flex; align-items:baseline; gap:10px; padding:9px 12px;
+      border-radius:8px; color:var(--chalk); text-decoration:none; font-size:14px; }
+    .ready a:hover { background:var(--plate); }
+    .ready i { font-style:normal; width:18px; flex:none; text-align:center; }
+    .ready .ok i { color:var(--accent); }
+    .ready .no i { color:var(--steel); }
+    .ready .no b { font-weight:500; }
+    .ready .warn-it i { color:var(--live); }
+    .ready .val { margin-left:auto; color:var(--steel); font-size:13px; }
     .row-lane { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
     .row-lane .ln { width:74px; }
     .row-lane .le { flex:1; max-width:460px; }
@@ -308,6 +321,31 @@
     <div class="f"><label for="${id}">${label}</label>
       <input id="${id}" type="${type}" value="${esc(val ?? '')}" ${extra} /></div>`;
 
+  // Что должно быть у каждого старта. Организатор без него — не «пока пусто»,
+  // а поломка: событие остаётся без хозяина, и роли не на кого повесить.
+  function readyList(ev) {
+    const r = ev.ready || {};
+    const d = (ev.divisions || []).length;
+    const items = [
+      ['Организатор назначен', r.organizers, 'stf', true],
+      ['Категории заведены', d, 'div', true],
+      ['Афиша и знак', (ev.has_banner ? 1 : 0) + (ev.has_mark ? 1 : 0), 'set', false],
+      ['Комплексы', r.wods, 'wod', false],
+      ['Заходы', r.heats, 'hea', false],
+      ['Расписание', r.schedule, 'sch', false],
+      ['Судьи на площадке', r.judges, 'stf', false],
+      ['Заявки', r.entries, 'ent', false],
+      ['Внесено результатов', r.results, 'res', false],
+    ];
+    return `<div class="ready">
+      ${items.map(([label, n, pane, must]) => `
+        <a href="#" data-go="${pane}" class="${n ? 'ok' : (must ? 'warn-it' : 'no')}">
+          <i>${n ? '✓' : (must ? '!' : '—')}</i><b>${label}</b>
+          <span class="val">${n || 'нет'}</span>
+        </a>`).join('')}
+    </div>`;
+  }
+
   const EV_TABS = [['set', 'Настройки'], ['div', 'Категории'], ['wod', 'Комплексы'],
                    ['hea', 'Заходы'], ['sch', 'Расписание'], ['res', 'Результаты'],
                    ['ent', 'Заявки'], ['stf', 'Судьи']];
@@ -359,6 +397,7 @@
       </div>
       <div class="err" id="ev-err" hidden></div>
       <div class="bar"><button class="btn" id="ev-save">Сохранить</button></div>
+      ${id ? readyList(ev) : ''}
 
       ${id ? `
       <div class="imgs">
@@ -453,6 +492,11 @@
       if (k === 'stf') loadStaff(id);
     };
     document.querySelectorAll('.etab').forEach(b => b.onclick = () => open(b.dataset.pane));
+    document.querySelectorAll('.ready [data-go]').forEach(a => a.onclick = e => {
+      e.preventDefault();
+      open(a.dataset.go);
+      window.scrollTo(0, 0);
+    });
     open(pane);
   }
 
