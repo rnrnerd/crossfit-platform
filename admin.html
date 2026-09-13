@@ -84,6 +84,7 @@
       font-size:14px; font-variant-numeric:tabular-nums; text-align:right; }
     .grid-res input.val:focus { outline:none; border-color:var(--accent); }
     .grid-res input.val.bad { border-color:var(--live); }
+    #r-find.bad { border-color:var(--live); }
     .grid-res input.val.ok { border-color:rgba(168,204,58,.55); }
     .grid-res .pts { font-size:11px; color:var(--steel); text-align:right;
       margin-top:3px; min-height:14px; }
@@ -934,10 +935,14 @@
     const g = await api(`/api/admin/events/${eid}/results?division=${did}`);
     if (g.error) { box.innerHTML = '<div class="note">Не загрузилось.</div>'; return; }
 
-    const picker = `<div class="grid"><div class="f"><label for="r-div">Категория</label>
-      <select id="r-div">${divs.map(d =>
-        `<option value="${d.id}"${d.id === did ? ' selected' : ''}>${esc(d.name)}</option>`
-      ).join('')}</select></div></div>`;
+    const picker = `<div class="grid">
+      <div class="f"><label for="r-div">Категория</label>
+        <select id="r-div">${divs.map(d =>
+          `<option value="${d.id}"${d.id === did ? ' selected' : ''}>${esc(d.name)}</option>`
+        ).join('')}</select></div>
+      <div class="f"><label for="r-find">Найти участника</label>
+        <input id="r-find" placeholder="Фамилия" autocomplete="off"></div>
+    </div>`;
 
     if (!g.wods.length || !g.rows.length) {
       box.innerHTML = picker + `<div class="note">${!g.wods.length
@@ -974,6 +979,20 @@
       </table></div>`;
 
     $('r-div').onchange = e => loadResults(eid, divs, +e.target.value);
+
+    // поиск по фамилии: в дивизионе на сотню человек своего глазами не найти,
+    // а ввод идёт заходами — судья приходит с листком из пяти фамилий
+    const rows = [...box.querySelectorAll('#results table tr[data-e]')];
+    $('r-find').oninput = e => {
+      const q = e.target.value.trim().toLowerCase();
+      let shown = 0;
+      rows.forEach(tr => {
+        const hit = !q || tr.children[1].textContent.toLowerCase().includes(q);
+        tr.hidden = !hit;
+        if (hit) shown++;
+      });
+      $('r-find').classList.toggle('bad', !!q && !shown);
+    };
 
     const cells = [...box.querySelectorAll('input.val')];
     const cols = g.wods.length;
