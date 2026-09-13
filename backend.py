@@ -44,7 +44,7 @@ import re
 import hashlib
 import logging
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import parse_qsl
 from aiohttp import web
 from dotenv import load_dotenv
@@ -239,6 +239,16 @@ ALTER TABLE events ADD COLUMN IF NOT EXISTS mark_v INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS weight_kg REAL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id INTEGER REFERENCES clubs(id);
+-- Оплата идёт мимо платформы: она фиксирует заявку и срок, а деньги
+-- собирает организатор. pay_due хранится у заявки, а не считается на лету:
+-- срок назначается в момент подачи и не должен уезжать, если организатор
+-- потом поменяет настройку события.
+ALTER TABLE events  ADD COLUMN IF NOT EXISTS pay_info TEXT NOT NULL DEFAULT '';
+ALTER TABLE events  ADD COLUMN IF NOT EXISTS pay_url  TEXT NOT NULL DEFAULT '';
+ALTER TABLE events  ADD COLUMN IF NOT EXISTS pay_days INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE entries ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'unpaid';
+ALTER TABLE entries ADD COLUMN IF NOT EXISTS pay_due DATE;
+ALTER TABLE entries ADD COLUMN IF NOT EXISTS withdraw_reason TEXT NOT NULL DEFAULT '';
 -- Scaled переименован в Intermediate: «скейл» читается как «упрощённый»,
 -- а это средний уровень, а не уценённый. Идемпотентно — гоняется каждый старт.
 UPDATE divisions SET level = 'inter' WHERE level = 'sc';
@@ -914,7 +924,8 @@ async def h_news_image(r):
 async def _my_entry(c, event_id, user_id):
     """Активная заявка пользователя на событие, если она есть."""
     return await c.fetchrow(
-        """SELECT en.id, en.division_id, en.team_name, d.name AS division
+        """SELECT en.id, en.division_id, en.team_name, en.payment_status,
+                  en.pay_due, d.name AS division, d.price
            FROM entries en
            JOIN entry_members m ON m.entry_id = en.id
            JOIN divisions d ON d.id = en.division_id
@@ -967,16 +978,47 @@ async def h_entry_create(r):
             if taken >= d["max_entries"]:
                 return _json({"error": "division_full"}, status=409)
 
+        # Срок оплаты. Позже закрытия регистрации ждать бессмысленно — платить
+        # будет уже не за что, поэтому берём то, что наступит раньше.
+        due = date.today() + timedelta(days=max(1, ev["pay_days"] or 3))
+        if ev["reg_closes_at"] and ev["reg_closes_at"] < due:
+            due = ev["reg_closes_at"]
+
         async with c.transaction():
             entry_id = await c.fetchval(
-                """INSERT INTO entries (event_id, division_id) VALUES ($1,$2)
-                   RETURNING id""", eid, did)
+                """INSERT INTO entries (event_id, division_id, pay_due)
+                   VALUES ($1,$2,$3) RETURNING id""", eid, did, due)
             await c.execute(
                 """INSERT INTO entry_members (entry_id, user_id, is_captain)
                    VALUES ($1,$2,TRUE)""", entry_id, u["id"])
         logger.info("Заявка %s: событие %s, дивизион %s, атлет %s",
                     entry_id, eid, did, u["id"])
-    return _json({"entry_id": entry_id, "division_id": did, "division": d["name"]})
+    return _json({"entry_id": entry_id, "division_id": did, "division": d["name"],
+                  "pay_due": str(due)})
+
+
+async def release_unpaid_loop(app):
+    """Освобождение мест по неоплаченным заявкам.
+
+    Заявку не удаляем и не прячем: ставим `withdrawn` с причиной. Человек
+    должен увидеть, почему его сняли, а организатор — вернуть заявку одним
+    кликом, если деньги пришли позже. Уведомлений пока нет (#10), и это
+    единственное, что смягчает тихую потерю участника.
+    """
+    await asyncio.sleep(30)
+    while True:
+        try:
+            async with db_pool.acquire() as c:
+                rows = await c.fetch(
+                    """UPDATE entries SET status='withdrawn', withdraw_reason='unpaid'
+                       WHERE status='active' AND payment_status='unpaid'
+                         AND pay_due IS NOT NULL AND pay_due < CURRENT_DATE
+                       RETURNING id""")
+            if rows:
+                logger.info("Снято за неоплату: %s заявок", len(rows))
+        except Exception as e:
+            logger.warning("Освобождение мест не сработало: %s", e)
+        await asyncio.sleep(3600)
 
 
 async def h_entry_withdraw(r):
@@ -999,7 +1041,8 @@ async def h_entry_withdraw(r):
         if not entry:
             return _json({"error": "no_entry"}, status=404)
         await c.execute(
-            "UPDATE entries SET status='withdrawn' WHERE id=$1", entry["id"])
+            """UPDATE entries SET status='withdrawn', withdraw_reason='self'
+               WHERE id=$1""", entry["id"])
         logger.info("Заявка %s снята атлетом %s", entry["id"], u["id"])
     return _json({"ok": True})
 
@@ -1670,7 +1713,8 @@ async def h_event(r):
         "has_mark": bool(ev["mark_v"]), "mark_v": ev["mark_v"],
         "athletes": athletes, "entries": entries,
         "status": ev["status"],
-        "my_entry": dict(mine) if mine else None,
+        "my_entry": (dict(mine) | {"pay_due": str(mine["pay_due"] or "")}) if mine else None,
+        "pay_info": ev["pay_info"], "pay_url": ev["pay_url"],
         "has": {k: int(v) for k, v in counts.items()},
         "feed": bool(ev["feed_url"]), "feed_down": feed_down,
         "profile_complete": bool(me and me["name"] and me["gender"]) if me else False,
@@ -1778,7 +1822,7 @@ async def a_events(r):
 
 
 EVENT_FIELDS = ("title", "description", "city", "venue", "status", "visibility",
-                "telegram", "instagram", "feed_url")
+                "telegram", "instagram", "feed_url", "pay_url")
 EVENT_DATES = ("date_start", "date_end", "reg_opens_at", "reg_closes_at",
                "qual_start", "qual_end")
 
@@ -1815,6 +1859,11 @@ async def a_event_save(r):
     vals["status"] = status
     vals["visibility"] = vals["visibility"] if vals["visibility"] in ("public", "link") else "public"
     vals["description"] = str(body.get("description") or "")[:4000]
+    vals["pay_info"] = str(body.get("pay_info") or "")[:2000]
+    try:
+        vals["pay_days"] = max(1, min(60, int(body.get("pay_days") or 3)))
+    except (TypeError, ValueError):
+        vals["pay_days"] = 3
     vals.update(dates)
 
     async with db_pool.acquire() as c:
@@ -1822,12 +1871,14 @@ async def a_event_save(r):
             row = await c.fetchrow(
                 """UPDATE events SET title=$2, description=$3, city=$4, venue=$5,
                         status=$6, visibility=$7, telegram=$8, instagram=$9, feed_url=$10,
-                        date_start=$11, date_end=$12, reg_opens_at=$13, reg_closes_at=$14,
-                        qual_start=$15, qual_end=$16
+                        pay_info=$11, pay_url=$12, pay_days=$13,
+                        date_start=$14, date_end=$15, reg_opens_at=$16, reg_closes_at=$17,
+                        qual_start=$18, qual_end=$19
                    WHERE id=$1 RETURNING id""",
                 int(eid), vals["title"], vals["description"], vals["city"], vals["venue"],
                 vals["status"], vals["visibility"], vals["telegram"], vals["instagram"],
-                vals["feed_url"], *[dates[k] for k in EVENT_DATES])
+                vals["feed_url"], vals["pay_info"], vals["pay_url"], vals["pay_days"],
+                *[dates[k] for k in EVENT_DATES])
             if not row:
                 return _json({"error": "not_found"}, status=404)
             new_id = row["id"]
@@ -1842,12 +1893,14 @@ async def a_event_save(r):
             new_id = await c.fetchval(
                 """INSERT INTO events (slug, title, description, city, venue, status,
                         visibility, telegram, instagram, feed_url,
+                        pay_info, pay_url, pay_days,
                         date_start, date_end, reg_opens_at, reg_closes_at, qual_start, qual_end)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
                    RETURNING id""",
                 uniq, vals["title"], vals["description"], vals["city"], vals["venue"],
                 vals["status"], vals["visibility"], vals["telegram"], vals["instagram"],
-                vals["feed_url"], *[dates[k] for k in EVENT_DATES])
+                vals["feed_url"], vals["pay_info"], vals["pay_url"], vals["pay_days"],
+                *[dates[k] for k in EVENT_DATES])
         logger.info("Админка: событие %s сохранено", new_id)
     return _json({"ok": True, "id": new_id})
 
@@ -1883,7 +1936,8 @@ async def a_event_one(r):
                     WHERE w.event_id=$1)                           AS results""", eid)
     out = {k: (str(ev[k]) if isinstance(ev[k], date) else ev[k])
            for k in ("id", "slug", "title", "description", "city", "venue", "status",
-                     "visibility", "telegram", "instagram", "feed_url") + EVENT_DATES}
+                     "visibility", "telegram", "instagram", "feed_url",
+                     "pay_info", "pay_url", "pay_days") + EVENT_DATES}
     for k in EVENT_DATES:
         out[k] = str(ev[k] or "")
     out["has_banner"] = bool(ev["banner_v"])
@@ -2011,6 +2065,7 @@ async def a_entries(r):
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT en.id, en.status, en.team_name, en.created_at, d.name AS division,
+                      en.payment_status, en.pay_due, en.withdraw_reason, d.price,
                       ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
                       ARRAY_AGG(COALESCE(NULLIF(u.city,''),'—') ORDER BY m.is_captain DESC, u.name) AS cities
                FROM entries en
@@ -2018,10 +2073,13 @@ async def a_entries(r):
                JOIN entry_members m ON m.entry_id = en.id
                JOIN users u ON u.id = m.user_id
                WHERE en.event_id=$1
-               GROUP BY en.id, en.status, en.team_name, en.created_at, d.name, d.ord
+               GROUP BY en.id, en.status, en.team_name, en.created_at, d.name, d.ord,
+                        en.payment_status, en.pay_due, en.withdraw_reason, d.price
                ORDER BY d.ord, en.id""", eid)
     return _json([{
         "id": x["id"], "status": x["status"], "team_name": x["team_name"],
+        "payment_status": x["payment_status"], "pay_due": str(x["pay_due"] or ""),
+        "withdraw_reason": x["withdraw_reason"], "price": x["price"],
         "division": x["division"], "members": list(x["members"] or []),
         "cities": list(x["cities"] or []),
         "created_at": x["created_at"].isoformat() if x["created_at"] else "",
@@ -2576,6 +2634,27 @@ async def a_sched_delete(r):
     return _json({"ok": True})
 
 
+async def a_entry_payment(r):
+    """Отметка оплаты. Деньги идут мимо платформы, поэтому это ровно то,
+    что организатор увидел у себя на счету, и ничего больше.
+    """
+    if not _admin_ok(r):
+        return _need_admin()
+    try:
+        enid = int(r.match_info["id"])
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    paid = bool(body.get("paid"))
+    async with db_pool.acquire() as c:
+        row = await c.fetchrow(
+            """UPDATE entries SET payment_status=$2 WHERE id=$1
+               RETURNING id""", enid, "paid" if paid else "unpaid")
+    if not row:
+        return _json({"error": "not_found"}, status=404)
+    return _json({"ok": True})
+
+
 async def a_entry_status(r):
     if not _admin_ok(r):
         return _need_admin()
@@ -2589,7 +2668,12 @@ async def a_entry_status(r):
         return _json({"error": "bad_request"}, status=400)
     async with db_pool.acquire() as c:
         row = await c.fetchrow(
-            "UPDATE entries SET status=$2 WHERE id=$1 RETURNING id", enid, st)
+            """UPDATE entries SET status=$2,
+                      withdraw_reason = CASE WHEN $2='active' THEN ''
+                                             ELSE 'organizer' END,
+                      pay_due = CASE WHEN $2='active' AND payment_status='unpaid'
+                                     THEN CURRENT_DATE + 3 ELSE pay_due END
+               WHERE id=$1 RETURNING id""", enid, st)
     if not row:
         return _json({"error": "not_found"}, status=404)
     logger.info("Админка: заявка %s → %s", enid, st)
@@ -2829,6 +2913,7 @@ def build_web_app():
     app.router.add_post("/api/admin/events/{id}/staff", a_staff_save)
     app.router.add_delete("/api/admin/events/{id}/staff/{uid}", a_staff_delete)
     app.router.add_post("/api/admin/entries/{id}", a_entry_status)
+    app.router.add_post("/api/admin/entries/{id}/payment", a_entry_payment)
     app.router.add_post("/api/admin/divisions", a_division_save)
     app.router.add_put("/api/admin/divisions/{id}", a_division_save)
     app.router.add_delete("/api/admin/divisions/{id}", a_division_delete)
@@ -2860,13 +2945,16 @@ def main():
             await init_db()
             # фоновый опрос канала партнёра, если он включён
             app["news_import"] = asyncio.create_task(news_import_loop(app))
+            # освобождение мест по неоплаченным заявкам
+            app["release_unpaid"] = asyncio.create_task(release_unpaid_loop(app))
         else:
             logger.warning("DATABASE_URL не задан — API работать не будет")
 
     async def on_cleanup(app):
-        task = app.get("news_import")
-        if task:
-            task.cancel()
+        for key in ("news_import", "release_unpaid"):
+            task = app.get(key)
+            if task:
+                task.cancel()
 
     app = build_web_app()
     app.on_startup.append(on_startup)

@@ -134,6 +134,7 @@
     .dot.live { background:var(--live); }
     .dot.open { background:var(--chalk); }
     .dot.you  { background:var(--accent); }
+    .dot.warn { background:#f5a03c; }
     .feed-title { font-size:21px; font-weight:700; line-height:1.2; letter-spacing:-.02em; margin-top:5px; }
     .meta { font-size:13px; color:var(--steel); margin-top:4px; }
     .mine { font-size:13px; color:var(--accent); margin-top:6px; display:flex; align-items:center; gap:7px; }
@@ -326,6 +327,17 @@
     .entry-top { display:flex; align-items:center; gap:9px; font-size:13px; color:var(--accent); }
     .entry-div { font-size:19px; font-weight:700; letter-spacing:-.02em; margin-top:7px; }
     .entry-act { margin-top:6px; }
+    /* Оплата идёт мимо платформы, поэтому шаг «заплатить» нельзя проглотить:
+       сумма, срок и реквизиты стоят прямо в карточке заявки. */
+    .pay { margin-top:14px; padding-top:14px; box-shadow:inset 0 1px 0 var(--hair); }
+    .pay-sum { display:flex; align-items:baseline; gap:8px; font-size:19px;
+      font-weight:700; font-variant-numeric:tabular-nums; }
+    .pay-sum span { font-size:13px; font-weight:400; color:var(--steel); }
+    .pay-due { margin-top:8px; font-size:13px; color:var(--steel); }
+    .pay-due.hot { color:var(--live); }
+    .pay-how { margin-top:10px; font-size:14px; line-height:1.5; white-space:pre-line; }
+    .pay .btn { margin-top:14px; }
+    .sheet-note { margin-top:10px; font-size:13px; color:var(--steel); text-align:center; }
     .entry-act button { background:none; border:none; cursor:pointer;
       min-height:44px; padding:0 2px; margin-left:-2px;
       font-size:14px; color:var(--steel); text-decoration:underline;
@@ -1737,14 +1749,36 @@
 
     // Блок действия на экране события: одно состояние — один блок.
     function actionBlock(ev) {
-      if (ev.my_entry) return `
+      if (ev.my_entry) {
+        const e = ev.my_entry;
+        const paid = e.payment_status === 'paid';
+        const left = daysLeft(e.pay_due);
+        // Платформа денег не берёт, и её работа — не спрятать этот шаг,
+        // а назвать его: сколько, куда и до какого числа. Срок виден с первой
+        // секунды: место держится до него, дальше заявка снимается сама.
+        const due = paid || left === null ? ''
+          : left < 0 ? 'Срок оплаты истёк'
+          : left === 0 ? 'Оплатить нужно сегодня'
+          : `Оплатить до ${fmtDay(e.pay_due)} — ${left} ${
+              plural(left, 'день', 'дня', 'дней')}`;
+        return `
         <div class="entry">
-          <div class="entry-top"><i class="dot you"></i>Вы заявлены</div>
-          <div class="entry-div">${esc(ev.my_entry.division)}</div>
+          <div class="entry-top"><i class="dot ${paid ? 'you' : 'warn'}"></i>${
+            paid ? 'Участие оплачено' : 'Заявка принята'}</div>
+          <div class="entry-div">${esc(e.division)}</div>
+          ${paid ? '' : `
+            <div class="pay">
+              <div class="pay-sum">${esc(money(e.price))}<span>оплата у организатора</span></div>
+              ${due ? `<div class="pay-due${left !== null && left <= 1 ? ' hot' : ''}">${
+                esc(due)}</div>` : ''}
+              ${ev.pay_info ? `<div class="pay-how">${esc(ev.pay_info)}</div>` : ''}
+              ${ev.pay_url ? '<button class="btn" id="ev-pay">Перейти к оплате</button>' : ''}
+            </div>`}
           ${ev.status === 'registration'
             ? '<div class="entry-act"><button id="ev-withdraw">Снять заявку</button></div>'
             : ''}
         </div>`;
+      }
       if (ev.status !== 'registration') return '';
       if (isAnnounced(ev)) return `
         <div class="notice">
@@ -1762,6 +1796,9 @@
 
     function wireActions(ev) {
       const reg = $('ev-register'), wd = $('ev-withdraw'), pr = $('ev-to-profile');
+      const pay = $('ev-pay');
+      // ссылка организатора уводит из мини-аппа наружу — открываем как внешнюю
+      if (pay) pay.onclick = () => openOut(evCur.pay_url);
       if (reg) reg.onclick = () => pickDivision(ev, reg);
       if (wd)  wd.onclick  = () => confirmWithdraw(ev, wd);
       if (pr)  pr.onclick  = () => show('profile');
@@ -1799,6 +1836,8 @@
         <div role="radiogroup" aria-label="Категория">${rows}</div>
         <div class="sheet-foot">
           <button class="btn" id="sh-go" disabled>Выберите категорию</button>
+          <div class="sheet-note">Оплата у организатора — реквизиты и срок
+            появятся сразу после подачи.</div>
           <button class="btn text" id="sh-cancel">Отмена</button>
         </div>`, trigger);
 
@@ -1808,9 +1847,10 @@
         $('sheet').querySelectorAll('.opt').forEach(x => x.setAttribute('aria-checked', 'false'));
         b.setAttribute('aria-checked', 'true');
         chosen = b.dataset.id;
-        // кнопка называет цену: человек видит, за что платит, до нажатия
-        const price = Number(b.dataset.price);
-        go.textContent = price ? `Подать заявку · ${money(price)}` : 'Подать заявку';
+        // Цену не выносим на кнопку: платформа денег не принимает, и
+        // «Подать заявку · 3 500 ₽» читалось бы как оплата. Сумма стоит
+        // в строке категории, а куда платить — скажем после подачи.
+        go.textContent = 'Подать заявку';
         go.disabled = false;
       });
 
@@ -1926,6 +1966,14 @@
     const ptLogo = p => p.has_logo
       ? `<img src="/api/partner-logo/${p.id}?v=${p.logo_v}" alt="">`
       : esc(p.name.slice(0, 2));
+
+    // Внешняя ссылка: t.me открываем внутри Telegram, остальное — системно.
+    function openOut(url) {
+      if (!url) return;
+      if (tg?.openTelegramLink && /^https?:\/\/t\.me\//.test(url)) tg.openTelegramLink(url);
+      else if (tg?.openLink) tg.openLink(url);
+      else window.open(url, '_blank', 'noopener');
+    }
 
     // Ссылка на канал открывается внутри Telegram, а не в браузере: человек
     // не выпадает из приложения, и переход стоит ему один тап.

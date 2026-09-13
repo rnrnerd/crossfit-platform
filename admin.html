@@ -59,6 +59,7 @@
       border-radius:6px; padding:3px 7px; white-space:nowrap; }
     .tag.on { background:var(--accent); color:var(--void); }
     .tag.off { color:var(--steel); }
+    .tag.late { color:var(--live); }
     /* те же цвета уровней, что в приложении: оператор сверяет глазами */
     .tag.lv-bg    { color:#4ec97a; background:rgba(78,201,122,.15); }
     .tag.lv-inter { color:#4a9df0; background:rgba(74,157,240,.15); }
@@ -335,6 +336,7 @@
       ['Расписание', r.schedule, 'sch', false],
       ['Судьи на площадке', r.judges, 'stf', false],
       ['Заявки', r.entries, 'ent', false],
+      ['Реквизиты для оплаты', ev.pay_info ? 1 : 0, 'set', false],
       ['Внесено результатов', r.results, 'res', false],
     ];
     return `<div class="ready">
@@ -391,6 +393,14 @@
         ${F('ev-ig', 'Instagram', ev.instagram, 'url')}
         <div class="f wide"><label for="ev-desc">Описание</label>
           <textarea id="ev-desc">${esc(ev.description)}</textarea></div>
+        ${F('ev-payurl', 'Ссылка на оплату', ev.pay_url, 'url')}
+        ${F('ev-paydays', 'Срок оплаты, дней', ev.pay_days ?? 3, 'number')}
+        <div class="f wide"><label for="ev-payinfo">Как оплатить</label>
+          <textarea id="ev-payinfo" placeholder="Перевод на карту 0000 0000 0000 0000, в комментарии фамилия и категория">${
+            esc(ev.pay_info || '')}</textarea>
+          <div class="muted">Платформа денег не принимает — этот текст атлет видит
+            сразу после подачи заявки. Неоплаченная заявка держит место до срока,
+            потом снимается автоматически.</div></div>
         <div class="f wide"><label for="ev-feed">Адрес соревновательного модуля</label>
           <input id="ev-feed" type="url" value="${esc(ev.feed_url)}"
                  placeholder="https://… — пусто, если турнир ведётся в платформе" /></div>
@@ -510,6 +520,8 @@
       qual_start: $('ev-qs').value, qual_end: $('ev-qe').value,
       telegram: $('ev-tg').value, instagram: $('ev-ig').value,
       description: $('ev-desc').value, feed_url: $('ev-feed').value,
+      pay_info: $('ev-payinfo').value, pay_url: $('ev-payurl').value,
+      pay_days: $('ev-paydays').value,
     };
     b.disabled = true; b.textContent = 'Сохраняем…';
     const res = await send(id ? '/api/admin/events/' + id : '/api/admin/events',
@@ -1145,7 +1157,7 @@
     };
   }
 
-  let entryCat = '*';
+  let entryCat = '*', entryPay = '*';
 
   async function loadEntries(eid) {
     const box = $('entries');
@@ -1155,16 +1167,31 @@
     const active = list.filter(x => x.status === 'active').length;
     // фильтр по категориям: в списке на сотню заявок глазами свою группу не найти
     const cats = [...new Set(list.map(x => x.division))].sort();
-    const shown = entryCat === '*' ? list : list.filter(x => x.division === entryCat);
+    const today = new Date().toISOString().slice(0, 10);
+    const PAYF = {
+      '*': () => true,
+      unpaid: x => x.status === 'active' && x.payment_status !== 'paid',
+      late: x => x.status === 'active' && x.payment_status !== 'paid'
+                 && x.pay_due && x.pay_due < today,
+      paid: x => x.payment_status === 'paid',
+    };
+    const shown = list.filter(x => (entryCat === '*' || x.division === entryCat)
+                                   && PAYF[entryPay](x));
     box.innerHTML = `
       <div class="sub">${active} активных из ${list.length}</div>
+      <div class="checks" style="margin-bottom:10px">
+        ${[['*','Любая оплата'],['unpaid','Ждут оплаты'],['late','Просрочены'],['paid','Оплачены']]
+          .map(([k, label]) => `<button class="tag${entryPay === k ? ' on' : ''}" data-pay-f="${k}">${
+            label} ${list.filter(PAYF[k]).length}</button>`).join('')}
+      </div>
       <div class="checks" style="margin-bottom:14px">
         <button class="tag${entryCat === '*' ? ' on' : ''}" data-cat="*">Все ${list.length}</button>
         ${cats.map(c => `<button class="tag${entryCat === c ? ' on' : ''}" data-cat="${esc(c)}">${
           esc(c)} ${list.filter(x => x.division === c).length}</button>`).join('')}
       </div>
       <table>
-        <tr><th>Участник</th><th>Категория</th><th>Город</th><th>Подана</th><th>Статус</th><th></th></tr>
+        <tr><th>Участник</th><th>Категория</th><th>Город</th><th>Подана</th>
+            <th>Оплата</th><th>Статус</th><th></th></tr>
         ${shown.map(e => `
           <tr>
             <td><b>${esc(e.team_name || e.members[0] || '—')}</b>${
@@ -1173,8 +1200,16 @@
             <td>${esc(e.division)}</td>
             <td>${esc(e.cities[0] || '—')}</td>
             <td>${esc((e.created_at || '').slice(0, 10))}</td>
+            <td>${e.payment_status === 'paid'
+              ? '<span class="tag on">Оплачена</span>'
+              : `<span class="tag${e.pay_due && e.pay_due < today ? ' late' : ''}">${
+                  e.pay_due ? 'до ' + esc(e.pay_due.slice(5)) : 'не оплачена'}</span>`}
+              <button class="btn link" data-pay="${e.id}" data-to="${
+                e.payment_status === 'paid' ? '0' : '1'}">${
+                e.payment_status === 'paid' ? 'снять отметку' : 'отметить'}</button></td>
             <td><span class="tag ${e.status === 'active' ? '' : 'off'}">${
-              e.status === 'active' ? 'Активна' : 'Снята'}</span></td>
+              e.status === 'active' ? 'Активна'
+                : e.withdraw_reason === 'unpaid' ? 'Снята: не оплачена' : 'Снята'}</span></td>
             <td><button class="btn link${e.status === 'active' ? ' danger' : ''}"
                         data-en="${e.id}" data-to="${e.status === 'active' ? 'withdrawn' : 'active'}">${
               e.status === 'active' ? 'Снять' : 'Вернуть'}</button></td>
@@ -1182,6 +1217,17 @@
       </table>`;
     box.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => {
       entryCat = b.dataset.cat;
+      loadEntries(eid);
+    });
+    box.querySelectorAll('[data-pay-f]').forEach(b => b.onclick = () => {
+      entryPay = b.dataset.payF;
+      loadEntries(eid);
+    });
+    box.querySelectorAll('[data-pay]').forEach(b => b.onclick = async () => {
+      const res = await send(`/api/admin/entries/${b.dataset.pay}/payment`, 'POST',
+                             {paid: b.dataset.to === '1'});
+      if (res.error) { toast('Не получилось'); return; }
+      toast(b.dataset.to === '1' ? 'Отмечена оплата' : 'Отметка снята');
       loadEntries(eid);
     });
     box.querySelectorAll('[data-en]').forEach(b => b.onclick = async () => {
