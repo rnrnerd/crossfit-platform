@@ -1943,7 +1943,9 @@ async def h_admin_link(r):
         return _need_auth()
     if not await _staff_events(u["id"]):
         return _json({"error": "not_organizer"}, status=403)
-    base = (WEBAPP_URL or "").rstrip("/")
+    # WEBAPP_URL задан на боевом стенде; локально берём адрес из самого запроса,
+    # иначе ссылка выйдет относительной и Telegram её не откроет
+    base = (WEBAPP_URL or str(r.url.origin())).rstrip("/")
     return _json({"url": f"{base}/admin#t={_sign('l', u['id'], LINK_TTL)}"})
 
 

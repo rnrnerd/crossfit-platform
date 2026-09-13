@@ -177,8 +177,8 @@
 <div id="app" hidden>
   <div class="top">
     <b>Кроссфит-платформа</b>
-    <span class="muted">админка</span>
     <span class="sp"></span>
+    <span class="muted" id="whoami">админка</span>
     <button class="btn link" id="logout">Выйти</button>
   </div>
   <div class="wrap">
@@ -198,6 +198,11 @@
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   let PW = sessionStorage.getItem('adminpw') || '';
+  // Организатор входит своей телеграм-личностью: мини-апп даёт короткую
+  // ссылку, здесь она меняется на сессию. Пароль остаётся входом владельца.
+  let TOKEN = sessionStorage.getItem('admintoken') || '';
+  let ROLE = sessionStorage.getItem('adminrole') || '';
+  let WHO = sessionStorage.getItem('adminwho') || '';
 
   function toast(m) {
     const t = $('toast'); t.textContent = m; t.classList.add('show');
@@ -206,8 +211,9 @@
 
   // Пароль уходит в base64: заголовки HTTP не переносят кириллицу,
   // и с русским паролем браузер просто откажется отправить запрос.
-  const pwHeader = () => ({'X-Admin-Password-B64':
-    btoa(String.fromCharCode(...new TextEncoder().encode(PW)))});
+  const pwHeader = () => TOKEN
+    ? {'X-Admin-Token': TOKEN}
+    : {'X-Admin-Password-B64': btoa(String.fromCharCode(...new TextEncoder().encode(PW)))};
 
   async function api(path, opts = {}) {
     const headers = Object.assign(pwHeader(), opts.headers || {});
@@ -233,17 +239,53 @@
       return;
     }
     sessionStorage.setItem('adminpw', PW);
+    TOKEN = ''; sessionStorage.removeItem('admintoken');
+    ROLE = 'owner'; sessionStorage.setItem('adminrole', ROLE);
     start();
   };
   function logout() {
-    sessionStorage.removeItem('adminpw'); PW = '';
+    ['adminpw', 'admintoken', 'adminrole', 'adminwho'].forEach(k => sessionStorage.removeItem(k));
+    PW = TOKEN = ROLE = WHO = '';
     $('app').hidden = true; $('login').hidden = false;
   }
   $('logout').onclick = logout;
 
   function start() {
     $('login').hidden = true; $('app').hidden = false;
+    // Организатору разделы платформы не показываем вовсе: новости, клубы
+    // и партнёры — не его старт, а кнопка, которая всегда отвечает отказом,
+    // хуже отсутствующей.
+    const own = ROLE !== 'organizer';
+    document.querySelectorAll('.nav button').forEach(b => {
+      b.hidden = !own && b.dataset.page !== 'events';
+    });
+    $('whoami').textContent = own ? 'админка' : WHO;
     go('events');
+  }
+
+  // Ссылка из мини-аппа: токен приходит в хеше, меняем его на сессию
+  // и сразу вычищаем из адресной строки — ссылку могут переслать.
+  async function tryLink() {
+    const m = location.hash.match(/[#&]t=([^&]+)/);
+    if (!m) return false;
+    history.replaceState(null, '', location.pathname);
+    const r = await fetch('/api/admin/session', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: decodeURIComponent(m[1])}),
+    }).then(x => x.json()).catch(() => ({error: 'net'}));
+    if (r.error) {
+      $('login-err').hidden = false;
+      $('login-err').textContent = r.error === 'bad_token'
+        ? 'Ссылка устарела. Откройте админку из бота заново.'
+        : 'Не удалось войти по ссылке.';
+      return false;
+    }
+    TOKEN = r.token; ROLE = 'organizer'; WHO = r.name; PW = '';
+    sessionStorage.setItem('admintoken', TOKEN);
+    sessionStorage.setItem('adminrole', ROLE);
+    sessionStorage.setItem('adminwho', WHO);
+    start();
+    return true;
   }
 
   let page = 'events';
@@ -296,7 +338,8 @@
     m.innerHTML = `
       <div class="row-between">
         <div><h2>События</h2><div class="sub">${list.length} всего, включая черновики</div></div>
-        <button class="btn" id="new-ev">Новое событие</button>
+        ${ROLE === 'organizer' ? ''
+          : '<button class="btn" id="new-ev">Новое событие</button>'}
       </div>
       <table>
         <tr><th>Название</th><th>Город</th><th>Статус</th><th>Начало</th>
@@ -314,7 +357,7 @@
             <td class="num">${e.divisions}</td><td class="num">${e.entries}</td>
           </tr>`).join('')}
       </table>`;
-    $('new-ev').onclick = () => editEvent(null);
+    if ($('new-ev')) $('new-ev').onclick = () => editEvent(null);
     m.querySelectorAll('tr.click').forEach(t => t.onclick = () => editEvent(t.dataset.id));
   }
 
@@ -1489,9 +1532,14 @@
 
   // ── Старт ──
   (async () => {
-    if (!PW) return;
+    if (await tryLink()) return;
+    if (!PW && !TOKEN) return;
     const r = await api('/api/admin/check');
-    if (!r.error) start();
+    if (r.error) { logout(); return; }
+    // сессию могли открыть в другой вкладке — роль берём с сервера
+    if (r.role) { ROLE = r.role; sessionStorage.setItem('adminrole', ROLE); }
+    if (r.name) { WHO = r.name; sessionStorage.setItem('adminwho', WHO); }
+    start();
   })();
 </script>
 </body>

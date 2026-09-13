@@ -1948,12 +1948,29 @@
           </div>
         </button>`).join('');
 
+      // Организатору нужен десктоп: карточка, категории, комплексы и заходы
+      // на телефоне не заводятся. Ссылка короткая, дальше сессия на 12 часов.
+      const isOrg = staff.some(e => e.role === 'organizer');
+      const admin = !isOrg ? '' : `
+        <div class="pad" style="padding-top:14px">
+          <button class="btn quiet" id="go-admin">Открыть админку</button>
+          <div class="note" style="padding:10px 0 0">Откроется в браузере.
+            Там заводятся категории, комплексы, заходы и расписание.</div>
+        </div>`;
       box.innerHTML = staff.length
-        ? `<div class="h">Работа на стартах</div>${staffRows}
+        ? `<div class="h">Работа на стартах</div>${staffRows}${admin}
            <div class="h">Мои заявки</div>${entryRows
              || '<div class="note">Вы пока никуда не заявлены.</div>'}`
         : entryRows;
       box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+      const ga = $('go-admin');
+      if (ga) ga.onclick = async () => {
+        ga.disabled = true;
+        const r = await send('/api/admin/link', 'POST', {});
+        ga.disabled = false;
+        if (r.error || !r.url) { toast('Не получилось открыть админку'); return; }
+        openOut(r.url);
+      };
     }
 
     // ── Медиа-партнёр ──
