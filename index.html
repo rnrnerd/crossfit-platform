@@ -373,12 +373,8 @@
     /* строка выбора категории + прогресс комплексов */
     .pick { display:flex; align-items:center; justify-content:space-between; gap:12px;
       padding:14px var(--pad) 10px; }
-    .pick button { display:flex; align-items:center; gap:7px; background:none; border:none;
-      padding:0; cursor:pointer; min-height:44px; font-size:17px; font-weight:700;
-      letter-spacing:-.02em; color:var(--chalk); text-align:left; }
-    .pick svg { width:12px; height:8px; flex:none; color:var(--steel); }
+    .pick #lb-pick-name { font-size:17px; font-weight:700; letter-spacing:-.02em; }
     .pick .prog { flex:none; font-size:13px; color:var(--steel); }
-    .pick button[disabled] { cursor:default; }
 
     /* Фильтр события: уровень и пол отдельными осями. Категории у организатора
        названы как ему удобно, а ищут их всегда одинаково — «мой уровень, мой
@@ -1363,35 +1359,26 @@
         lbDiv = (my || fit[0] || divs[0]).id;
       }
       const cur = divs.find(d => d.id === lbDiv) || divs[0];
-      const many = fit.length > 1;
-      box.innerHTML = filterBar(ev) + findBar('Найти участника')
-        + `<div class="pick"><button id="lb-pick"${many ? '' : ' disabled'}>
-          <span id="lb-pick-name">${esc(cur.name)}</span>
-          ${many ? `<svg viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.6"
-               stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>` : ''}
-        </button><div class="prog" id="lb-prog">Считаем…</div></div><div id="lb-body"></div>`;
+      // Категорию выбирает фильтр наверху, второго способа не заводим.
+      // Ряд с именами появляется, только когда двух осей физически не хватает:
+      // две категории с одинаковыми уровнем и полом — так бывает у возрастных
+      // групп. Пока оси различают всё, третий ряд был бы просто дублем.
+      const keys = fit.map(d => divLevel(d) + '/' + d.gender_rule);
+      const byName = new Set(keys).size === fit.length ? '' : `
+        <div class="filt" data-axis="div">
+          ${fit.map(d => `<button data-v="${d.id}" class="${
+            d.id === lbDiv ? 'on' : ''}">${esc(d.name)}</button>`).join('')}
+        </div>`;
+      box.innerHTML = filterBar(ev) + byName + findBar('Найти участника')
+        + `<div class="pick"><div id="lb-pick-name">${esc(cur.name)}</div>
+           <div class="prog" id="lb-prog">Считаем…</div></div><div id="lb-body"></div>`;
       wireFilter(ev);
       wireFind(ev);
-      if (many) $('lb-pick').onclick = () => pickDivisionFor(ev);
+      box.querySelectorAll('.filt[data-axis="div"] button').forEach(b =>
+        b.onclick = () => { lbDiv = +b.dataset.v; renderEvent(ev); });
       renderProtocol(ev);
     }
 
-    function pickDivisionFor(ev) {
-      openSheet(`
-        <h3>Категория</h3>
-        <div role="radiogroup" aria-label="Категория">
-          ${(ev.divisions || []).map(d => `
-            <button class="opt" role="radio" data-id="${d.id}" aria-checked="${d.id === lbDiv}">
-              <div class="opt-name">${paintLevel(d.name, d.level)}</div><i class="tick"></i>
-            </button>`).join('')}
-        </div>
-        <div class="sheet-foot"><button class="btn text" id="sh-close">Закрыть</button></div>`,
-        $('lb-pick'));
-      $('sh-close').onclick = closeSheet;
-      $('sheet').querySelectorAll('.opt').forEach(b => b.onclick = () => {
-        lbDiv = Number(b.dataset.id); lbOpen.clear(); closeSheet(); loadProtocol(ev);
-      });
-    }
 
     async function renderProtocol(ev) {
       const body = $('lb-body');
@@ -1539,10 +1526,12 @@
       if (!list.length) { box.innerHTML = '<div class="note">Расписание пока не опубликовано.</div>'; return; }
       // строка без категории — общая (регистрация, перерыв, награждение),
       // она нужна всем и фильтром не убирается
-      const names = new Set(divsMatching(ev).map(d => d.name));
-      const shown = list.filter(s => !s.division || names.has(s.division));
+      // Фильтра здесь нет намеренно: расписание читают целиком — когда
+      // регистрация, когда брифинг, когда награждение. Резать его по своей
+      // категории значит прятать ровно то, за чем в него смотрят.
+      const shown = list;
       const days = [...new Set(shown.map(s => s.day))];
-      box.innerHTML = filterBar(ev) + (shown.length ? days.map(day => `
+      box.innerHTML = (shown.length ? days.map(day => `
         ${days.length > 1 ? `<div class="h">${esc(fmtDayLoose(day))}</div>` : '<div style="height:8px"></div>'}
         ${shown.filter(s => s.day === day).map(s => `
           <div class="sch-row">
@@ -1552,8 +1541,7 @@
               <div class="row-sub">${esc([s.location, s.division].filter(Boolean).join(', '))}</div>
             </div>
           </div>`).join('')}`).join('')
-        : '<div class="note">В этой категории пунктов расписания нет.</div>');
-      wireFilter(ev);
+        : '<div class="note">Расписание пока не опубликовано.</div>');
     }
 
     // ── Заходы ──
