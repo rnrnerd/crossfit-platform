@@ -203,15 +203,22 @@
     .my-title { font-size:17px; font-weight:700; line-height:1.25; letter-spacing:-.02em; }
 
     /* одно число на экран: главный факт состояния */
-    .hero { padding:26px var(--pad) 0; }
+    .hero { padding:24px var(--pad) 0; }
     .hero-label { font-size:13px; color:var(--steel); display:flex; align-items:center; gap:7px; }
     .hero-label.live { color:var(--live); }
     /* Значение бывает от «12 дней» до «14–15 февраля 2027» — кегль ступенями,
-       чтобы длинное не переносилось на вторую строку. */
-    .hero-value { font-size:52px; font-weight:800; line-height:1.02; letter-spacing:-.04em;
-      margin-top:8px; text-wrap:balance; }
-    .hero-value.long  { font-size:38px; letter-spacing:-.03em; }
-    .hero-value.xlong { font-size:28px; letter-spacing:-.02em; }
+       чтобы длинное не переносилось на вторую строку. Дисплейный кегль здесь
+       набран не размером, а весом и трекингом: 52px «12 дней» перекрикивали
+       и название события, и афишу над ними. */
+    .hero-value { font-size:36px; font-weight:800; line-height:1.06; letter-spacing:-.035em;
+      margin-top:6px; text-wrap:balance; }
+    .hero-value.long  { font-size:30px; letter-spacing:-.03em; }
+    .hero-value.xlong { font-size:24px; letter-spacing:-.02em; }
+    /* Стоимость — одной строкой под главным фактом. Цену сравнивают до того,
+       как выбирают дивизион, поэтому она стоит наверху, а не в строчке каждой
+       категории; точная цена выбранного дивизиона называется в шторке заявки. */
+    .hero-fee { display:flex; gap:8px; margin-top:12px; font-size:15px; color:var(--steel); }
+    .hero-fee span { font-weight:600; color:var(--chalk); }
 
     .rows { margin-top:8px; }
     .row { display:flex; align-items:baseline; justify-content:space-between; gap:16px;
@@ -225,6 +232,15 @@
       display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
     .h span { font-size:13px; font-weight:400; color:var(--steel); }
     .h.tight { padding-bottom:2px; }
+    /* Заголовок-раскрывашка. Дивизионов бывает пять, и развёрнутый список
+       отодвигает даты и организатора за пределы экрана. Счётчик виден
+       свёрнутым — иначе непонятно, что там спрятано и стоит ли открывать. */
+    .h-toggle { width:100%; border:none; background:none; color:var(--chalk);
+      font-family:inherit; text-align:left; cursor:pointer; }
+    .h-toggle:active { background:rgba(255,255,255,.05); }
+    .h-side { display:flex; align-items:center; gap:10px; }
+    .h-side svg { transition:transform .15s; }
+    .h-toggle[aria-expanded="true"] .h-side svg { transform:rotate(180deg); }
 
     .btn { display:block; width:100%; min-height:52px; border:none; border-radius:10px;
       background:var(--chalk); color:var(--void); font-size:15px; font-weight:700; cursor:pointer; }
@@ -1073,17 +1089,28 @@
 
       const hero = heroFact(ev);
       const place = [ev.city, ev.venue].filter(Boolean).join(', ');
-      const kindOf = d => d.team_size > 1 ? `Команда, ${d.team_size} чел.` : 'Личный зачёт';
 
-      const divs = (ev.divisions || []).map(d => `
+      // Личный зачёт — умолчание, и подписывать его в каждой строке незачем.
+      // Отмечаем только исключение: командный дивизион и размер команды.
+      const list = ev.divisions || [];
+      const divs = list.map(d => `
         <div class="row">
-          <div>
-            <div class="row-main">${esc(d.name)}</div>
-            <div class="row-sub">${esc(kindOf(d))}, ${esc(money(d.price))}${
-              d.team_size > 1 && d.price ? ' за команду' : ''}</div>
-          </div>
-          <div class="row-val num">${d.entries}${d.max_entries ? ` <span class="row-val q">/ ${d.max_entries}</span>` : ''}</div>
-        </div>`).join('') || '<div class="note">Дивизионы пока не объявлены.</div>';
+          <div class="row-main">${esc(d.name)}</div>
+          ${d.team_size > 1
+            ? `<div class="row-val q">Команда, ${d.team_size} чел.</div>` : ''}
+        </div>`).join('');
+
+      const chev = `<svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke="currentColor"
+             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>`;
+      // Один дивизион — это не выбор, прятать его под раскрывашку не за чем
+      const divBlock = !list.length
+        ? '<div class="h">Дивизионы</div><div class="note">Дивизионы пока не объявлены.</div>'
+        : list.length === 1
+          ? `<div class="h">Дивизионы</div><div class="rows">${divs}</div>`
+          : `<button class="h h-toggle" id="divs-toggle" aria-expanded="false"
+                     aria-controls="divs-list">Дивизионы<span class="h-side">${
+                       list.length}${chev}</span></button>
+             <div class="rows" id="divs-list" hidden>${divs}</div>`;
 
       // Регистрация уехала в главный факт — здесь её уже не повторяем
       const dates = [
@@ -1111,20 +1138,40 @@
           <div class="hero-value${
             hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
           }">${esc(hero.value)}</div>
+          ${feeLine(ev)}
         </div>
 
         <div style="padding-top:22px">${actionBlock(ev)}</div>
 
         ${ev.description ? `<div class="pad"><p class="ev-desc">${esc(ev.description)}</p></div>` : ''}
 
-        <div class="h">Дивизионы<span>заявок</span></div>
-        <div class="rows">${divs}</div>
+        ${divBlock}
 
         ${dates ? `<div class="h">Даты</div><div class="rows">${dates}</div>` : ''}
         ${links ? `<div class="h">Организатор</div><div class="pad links">${links}</div>` : ''}
         <div style="height:32px"></div>`;
 
       wireActions(ev);
+      const dt = $('divs-toggle');
+      if (dt) dt.onclick = () => {
+        const open = dt.getAttribute('aria-expanded') === 'true';
+        dt.setAttribute('aria-expanded', String(!open));
+        $('divs-list').hidden = open;
+      };
+    }
+
+    // Стоимость участия одной цифрой. «от» появляется, только когда цены
+    // дивизионов расходятся; бесплатный дивизион рядом с платными «от» описать
+    // нельзя, поэтому там честный диапазон.
+    function feeLine(ev) {
+      const p = (ev.divisions || []).map(d => d.price)
+        .filter(v => v !== null && v !== undefined);
+      if (!p.length) return '';
+      const min = Math.min(...p), max = Math.max(...p);
+      const sum = min === max ? money(min)
+                : min === 0   ? `Бесплатно — ${money(max)}`
+                              : `от ${money(min)}`;
+      return `<div class="hero-fee">Участие<span>${esc(sum)}</span></div>`;
     }
 
     // Модуль соревнования недоступен — это не «данных нет», а «нет связи»:
