@@ -487,7 +487,8 @@ async def h_me(r):
         # события, где пользователь участвует или организует
         my_entries = await c.fetch(
             """SELECT e.id, e.title, e.slug, e.date_start, e.date_end, e.status,
-                      e.mark_v, e.reg_closes_at, d.name AS division
+                      e.mark_v, e.reg_closes_at, d.name AS division, d.price,
+                      en.id AS entry_id, en.payment_status, en.pay_due
                FROM entry_members m
                JOIN entries en ON en.id = m.entry_id
                JOIN events e   ON e.id = en.event_id
@@ -517,6 +518,7 @@ async def h_me(r):
             "date_start": str(x["date_start"] or ""),
             "date_end": str(x["date_end"] or ""),
             "reg_closes_at": str(x["reg_closes_at"] or ""),
+            "pay_due": str(x["pay_due"] or ""),
             "has_mark": bool(x["mark_v"]),
         } for x in my_entries],
         "is_organizer": is_organizer,
@@ -525,6 +527,57 @@ async def h_me(r):
             "date_end": str(x["date_end"] or ""),
             "has_mark": bool(x["mark_v"]),
         } for x in staff_of],
+    })
+
+
+async def h_me_history(r):
+    """История выступлений атлета и сводка по ней для профиля.
+
+    Места считаем тем же `_division_table` + `_protocol_rows`, что и лидерборд:
+    число в профиле не должно расходиться с протоколом на награждении. Берём
+    заявки, по которым внесён хотя бы один результат, — иначе у старта, где
+    никто ещё не выходил на площадку, вышло бы «место» из одних нулей.
+    События на внешнем модуле сюда не попадают: там результат не связан
+    с заявкой (#29). В сводку идут только завершённые старты — место на идущем
+    ещё поменяется.
+    """
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    items = []
+    async with db_pool.acquire() as c:
+        entries = await c.fetch(
+            """SELECT en.id AS entry_id, en.division_id, e.id, e.title, e.status,
+                      e.date_start, e.date_end, e.mark_v,
+                      d.name AS division, d.team_size
+               FROM entry_members m
+               JOIN entries en  ON en.id = m.entry_id AND en.status = 'active'
+               JOIN events e    ON e.id = en.event_id
+               JOIN divisions d ON d.id = en.division_id
+               WHERE m.user_id = $1 AND e.feed_url = ''
+                 AND e.status IN ('live', 'finished')
+                 AND EXISTS (SELECT 1 FROM results x WHERE x.entry_id = en.id)
+               ORDER BY e.date_start DESC NULLS LAST, e.id DESC""", u["id"])
+        for x in entries:
+            table = await _division_table(c, x["id"], x["division_id"])
+            rows = _protocol_rows(*table, x["team_size"], mine=x["entry_id"])
+            mine = next((row for row in rows if row["is_me"]), None)
+            if not mine:
+                continue
+            items.append({
+                "id": x["id"], "title": x["title"], "status": x["status"],
+                "date_start": str(x["date_start"] or ""),
+                "date_end": str(x["date_end"] or ""),
+                "division": x["division"],
+                "has_mark": bool(x["mark_v"]), "mark_v": x["mark_v"],
+                "place": mine["place"], "of": len(rows), "points": mine["points"],
+            })
+    places = [i["place"] for i in items if i["status"] == "finished"]
+    return _json({
+        "stats": {"starts": len(places),
+                  "podiums": sum(1 for p in places if p <= 3),
+                  "best": min(places) if places else None},
+        "history": items,
     })
 
 
@@ -3342,6 +3395,7 @@ def build_web_app():
     app.router.add_get("/", h_index)
     app.router.add_get("/healthz", h_health)
     app.router.add_get("/api/me", h_me)
+    app.router.add_get("/api/me/history", h_me_history)
     app.router.add_get("/api/photo/{id}", h_photo)
     app.router.add_get("/api/event-banner/{id}", h_event_banner)
     app.router.add_get("/api/event-mark/{id}", h_event_mark)
