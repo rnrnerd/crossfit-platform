@@ -378,6 +378,21 @@
     .sheet p { font-size:14px; color:var(--steel); padding:0 var(--pad) 8px; }
     .sheet .h { padding:18px var(--pad) 6px; }
     .sheet-foot { padding:14px var(--pad) 22px; display:grid; gap:10px; }
+    /* фильтры поиска: группа = заголовок цветом бренда + чипы, группы разделены линией */
+    .fgroup { padding:16px var(--pad) 18px; box-shadow:inset 0 -1px 0 var(--hair); }
+    .fgroup-h { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--accent); margin-bottom:10px; }
+    .fchips { display:flex; flex-wrap:wrap; gap:8px; }
+    .fchip { font:inherit; font-size:14px; font-weight:500; color:var(--chalk); cursor:pointer;
+      background:rgba(255,255,255,.06); border:none; border-radius:999px; padding:9px 14px; }
+    .fchip[aria-pressed="true"] { background:var(--chalk); color:var(--void); }
+    .fchip.lv-bg { color:#4ec97a; } .fchip.lv-inter { color:#4a9df0; }
+    .fchip.lv-rx { color:#f5a03c; } .fchip.lv-elite { color:#ef4a52; }
+    .fchip.lv-bg, .fchip.lv-inter, .fchip.lv-rx, .fchip.lv-elite { font-weight:700; }
+    .fchip.lv-bg[aria-pressed="true"]    { background:rgba(78,201,122,.2);  color:#4ec97a; box-shadow:inset 0 0 0 1.5px #4ec97a; }
+    .fchip.lv-inter[aria-pressed="true"] { background:rgba(74,157,240,.2);  color:#4a9df0; box-shadow:inset 0 0 0 1.5px #4a9df0; }
+    .fchip.lv-rx[aria-pressed="true"]    { background:rgba(245,160,60,.2);  color:#f5a03c; box-shadow:inset 0 0 0 1.5px #f5a03c; }
+    .fchip.lv-elite[aria-pressed="true"] { background:rgba(239,74,82,.2);   color:#ef4a52; box-shadow:inset 0 0 0 1.5px #ef4a52; }
     .opt { display:flex; align-items:center; justify-content:space-between; gap:14px;
       width:100%; text-align:left; background:none; border:none; cursor:pointer;
       padding:15px var(--pad); box-shadow:inset 0 -1px 0 var(--hair); }
@@ -1074,7 +1089,7 @@
       ['past',     'Завершённые', isPast,                       'desc'],
     ];
     let seg = 'upcoming';
-    let filters = {city: '', price: ''};
+    let filters = {city: '', price: '', levels: []};
 
     async function loadSearch() {
       const box = $('events-list');
@@ -1102,6 +1117,7 @@
       if (filters.price === 'free' && ev.price_min) return false;
       if (filters.price === '3000' && !(ev.price_min <= 3000)) return false;
       if (filters.price === '5000' && !(ev.price_min <= 5000)) return false;
+      if (filters.levels.length && !filters.levels.some(l => (ev.levels || []).includes(l))) return false;
       return true;
     }
 
@@ -1110,8 +1126,9 @@
       const list = allEvents.filter(test).filter(matches).sort((a, b) =>
         (order === 'asc' ? 1 : -1) * String(a.date_start).localeCompare(String(b.date_start)));
       const box = $('events-list');
-      const active = filters.city || filters.price || $('q').value.trim();
-      $('filter-btn').classList.toggle('on', !!(filters.city || filters.price));
+      const filtered = !!(filters.city || filters.price || filters.levels.length);
+      const active = filtered || $('q').value.trim();
+      $('filter-btn').classList.toggle('on', filtered);
       if (!list.length) {
         box.innerHTML = `<div class="note">${active
           ? 'Ничего не нашлось.<br>Измените запрос или снимите фильтры.'
@@ -1143,39 +1160,46 @@
       qTimer = setTimeout(renderFeed, 180);
     });
 
+    // Шторка фильтров — три группы чипов, у каждой свой заголовок.
+    // Ничего не выбрано в группе — значит «любой»: отдельной кнопки «Все» нет,
+    // повторное нажатие снимает выбор. Категории можно выбрать несколько.
     $('filter-btn').onclick = () => {
       const cities = [...new Set(allEvents.map(e => e.city).filter(Boolean))].sort();
-      const PRICES = [['', 'Любая'], ['free', 'Бесплатно'], ['3000', 'До 3 000 ₽'], ['5000', 'До 5 000 ₽']];
-      const optRow = (group, val, label, cur) => `
-        <button class="opt" role="radio" data-group="${group}" data-val="${esc(val)}"
-                aria-checked="${val === cur}">
-          <div class="opt-name">${esc(label)}</div><i class="tick"></i>
-        </button>`;
+      const levels = LEVELS.filter(([k]) => allEvents.some(e => (e.levels || []).includes(k)));
+      const PRICES = [['free', 'Бесплатно'], ['3000', 'До 3 000 ₽'], ['5000', 'До 5 000 ₽']];
+      const draft = {city: filters.city, price: filters.price, levels: [...filters.levels]};
+      const chip = (group, val, label, on, cls = '') => `
+        <button class="fchip ${cls}" data-group="${group}" data-val="${esc(val)}"
+                aria-pressed="${on}">${esc(label)}</button>`;
+      const group = (title, body) => body ? `
+        <section class="fgroup">
+          <div class="fgroup-h">${title}</div>
+          <div class="fchips">${body}</div>
+        </section>` : '';
       openSheet(`
         <h3>Фильтры</h3>
-        <div class="h">Город</div>
-        <div role="radiogroup" aria-label="Город">
-          ${optRow('city', '', 'Любой', filters.city)}
-          ${cities.map(c => optRow('city', c, c, filters.city)).join('')}
-        </div>
-        <div class="h">Цена</div>
-        <div role="radiogroup" aria-label="Цена">
-          ${PRICES.map(([v, l]) => optRow('price', v, l, filters.price)).join('')}
-        </div>
+        ${group('Категория', levels.map(([k, l]) =>
+          chip('levels', k, l, draft.levels.includes(k), 'lv-' + k)).join(''))}
+        ${group('Город', cities.map(c => chip('city', c, c, c === draft.city)).join(''))}
+        ${group('Стоимость', PRICES.map(([v, l]) => chip('price', v, l, v === draft.price)).join(''))}
         <div class="sheet-foot">
           <button class="btn" id="sh-apply">Показать</button>
           <button class="btn text" id="sh-reset">Сбросить фильтры</button>
         </div>`, $('filter-btn'));
-      const draft = {city: filters.city, price: filters.price};
-      $('sheet').querySelectorAll('.opt').forEach(b => b.onclick = () => {
-        const g = b.dataset.group;
-        $('sheet').querySelectorAll(`[data-group="${g}"]`)
-          .forEach(x => x.setAttribute('aria-checked', 'false'));
-        b.setAttribute('aria-checked', 'true');
-        draft[g] = b.dataset.val;
+      $('sheet').querySelectorAll('.fchip').forEach(b => b.onclick = () => {
+        const g = b.dataset.group, v = b.dataset.val;
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        if (g === 'levels') {
+          draft.levels = on ? [...draft.levels, v] : draft.levels.filter(x => x !== v);
+        } else {
+          $('sheet').querySelectorAll(`.fchip[data-group="${g}"]`)
+            .forEach(x => x.setAttribute('aria-pressed', 'false'));
+          draft[g] = on ? v : '';
+        }
+        b.setAttribute('aria-pressed', on);
       });
       $('sh-apply').onclick = () => { filters = draft; closeSheet(); renderFeed(); };
-      $('sh-reset').onclick = () => { filters = {city:'', price:''}; closeSheet(); renderFeed(); };
+      $('sh-reset').onclick = () => { filters = {city:'', price:'', levels:[]}; closeSheet(); renderFeed(); };
     };
 
     // ── Событие ──
