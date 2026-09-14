@@ -2585,13 +2585,21 @@ async def require_staff(r, event_id, roles=STAFF_ROLES):
     return u, role
 
 
-@owner_only
 async def a_users(r):
     """Поиск человека для назначения: по имени, username или tg_id.
 
     Назначить можно только того, кто уже открывал приложение, — до этого
     строки в `users` нет и связывать роль не с чем.
     """
+    # Организатору поиск нужен, чтобы назначить судью на свой старт, но листать
+    # всю базу по именам ему незачем: ему ищем только точное совпадение
+    # @username или tg_id — то, что судья сам ему продиктовал. Владельцу — всё.
+    who = await admin_actor(r)
+    if not who:
+        return _need_admin()
+    owner = bool(who.get("owner"))
+    if not owner and not await _staff_events(who["user_id"]):
+        return _need_admin()
     q = _clean(r.query.get("q"), 80)
     if len(q) < 2:
         return _json([])
@@ -2602,14 +2610,21 @@ async def a_users(r):
     like = f"%{term.lower()}%"
     digits = term if term.isdigit() else None
     async with db_pool.acquire() as c:
-        rows = await c.fetch(
-            """SELECT id, name, username, city, tg_id FROM users
-               WHERE LOWER(name) LIKE $1 OR LOWER(username) LIKE $1
-                  OR ($2::BIGINT IS NOT NULL AND tg_id = $2::BIGINT)
-               ORDER BY name LIMIT 20""", like, int(digits) if digits else None)
+        if owner:
+            rows = await c.fetch(
+                """SELECT id, name, username, city, tg_id FROM users
+                   WHERE LOWER(name) LIKE $1 OR LOWER(username) LIKE $1
+                      OR ($2::BIGINT IS NOT NULL AND tg_id = $2::BIGINT)
+                   ORDER BY name LIMIT 20""", like, int(digits) if digits else None)
+        else:
+            rows = await c.fetch(
+                """SELECT id, name, username, city, tg_id FROM users
+                   WHERE (username <> '' AND LOWER(username) = $1)
+                      OR ($2::BIGINT IS NOT NULL AND tg_id = $2::BIGINT)
+                   ORDER BY name LIMIT 5""", term.lower(), int(digits) if digits else None)
     return _json([{
         "id": x["id"], "name": x["name"] or "Без имени",
-        "username": x["username"] or "", "city": x["city"] or "",
+        "username": x["username"] or "", "city": (x["city"] or "") if owner else "",
     } for x in rows])
 
 

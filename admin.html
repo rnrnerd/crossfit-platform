@@ -179,10 +179,34 @@
       .row-between { flex-wrap:wrap; gap:10px; }
       .bar { flex-wrap:wrap; }
 
-      /* таблица сама себе прокрутка: страница по ширине не едет */
-      table { display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; }
-      td, th { white-space:nowrap; }
-      td { padding:10px 8px; }
+      /* Таблицы на телефоне — карточки: строка становится блоком, ячейки
+         переносятся, подпись колонки встаёт над значением (data-label ставит
+         labelTables). Кнопки действий — отдельной строкой во всю ширину: в таблице
+         они уезжали за правый край, и их было не найти. Сетка результатов
+         остаётся таблицей — там колонки и есть смысл. */
+      table.cards { display:block; margin-top:10px; }
+      table.cards tbody { display:block; }
+      table.cards tr { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px;
+        padding:12px 0; box-shadow:inset 0 -1px 0 var(--hair); }
+      table.cards tr.thead { display:none; }
+      table.cards td { display:block; padding:0; box-shadow:none; min-width:0; }
+      table.cards td:first-child { flex-basis:100%; }
+      table.cards td.num { text-align:left; }
+      table.cards td:empty { display:none; }
+      table.cards td[data-label]::before { content:attr(data-label); display:block;
+        font-size:11px; color:var(--steel); margin-bottom:1px; }
+      table.cards td.act { flex-basis:100%; display:flex; flex-wrap:wrap; gap:4px 14px; }
+      table.cards td.act .btn.link { padding:6px 0; min-height:32px; }
+      tr.click:hover td { background:none; }
+      .grid-res table { display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      .grid-res td, .grid-res th { white-space:nowrap; }
+
+      /* «Сохранить» прилипает к низу экрана, пока форма на экране: иначе
+         у длинной формы кнопка оказывается где-то посередине страницы */
+      .bar.save { position:sticky; bottom:0; z-index:3; background:var(--void);
+        margin:18px -14px 0; padding:10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+        box-shadow:inset 0 1px 0 var(--hair); }
+      .bar.save .btn { flex:1; }
 
       .etabs { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; margin:18px -14px 16px;
         padding:0 14px; }
@@ -280,6 +304,31 @@
     } catch (e) { return {error: 'net'}; }
   }
   const send = (p, m, b) => api(p, {method: m, body: b === undefined ? undefined : JSON.stringify(b)});
+
+  // На телефоне таблицы рисуются карточками (CSS table.cards). Здесь ячейкам
+  // проставляются подписи колонок, строка заголовков помечается, а ячейка
+  // с кнопками — отдельно. Делается на каждую перерисовку #main, чтобы не
+  // трогать все места, где собираются таблицы. Атрибуты наблюдатель не ловит,
+  // так что сам себя не будит.
+  function labelTables(root) {
+    root.querySelectorAll('table').forEach(t => {
+      if (t.closest('.grid-res')) return;
+      t.classList.add('cards');
+      const rows = [...t.rows];
+      const head = rows.find(r => r.querySelector('th'));
+      const names = head ? [...head.cells].map(c => c.textContent.trim()) : [];
+      if (head) head.classList.add('thead');
+      rows.forEach(r => {
+        if (r === head) return;
+        [...r.cells].forEach((c, i) => {
+          if (c.querySelector('button') && !c.querySelector('input, select')) c.classList.add('act');
+          else if (i > 0 && names[i]) c.dataset.label = names[i];
+        });
+      });
+    });
+  }
+  new MutationObserver(() => labelTables($('main')))
+    .observe($('main'), {childList: true, subtree: true});
 
   // ── Вход ──
   $('login-form').onsubmit = async e => {
@@ -469,6 +518,7 @@
       ).join('')}</div>` : ''}
 
       <div class="epane" id="p-set"${id && pane !== 'set' ? ' hidden' : ''}>
+      ${id ? readyList(ev) : ''}
       <div class="grid">
         ${F('ev-title', 'Название', ev.title)}
         ${F('ev-city', 'Город', ev.city)}
@@ -504,8 +554,7 @@
                  placeholder="https://… — пусто, если турнир ведётся в платформе" /></div>
       </div>
       <div class="err" id="ev-err" hidden></div>
-      <div class="bar"><button class="btn" id="ev-save">Сохранить</button></div>
-      ${id ? readyList(ev) : ''}
+      <div class="bar save"><button class="btn" id="ev-save">Сохранить</button></div>
 
       ${id ? `
       <div class="imgs">
@@ -710,7 +759,7 @@
         ${F('d-fg', 'Пол в модуле (М / Ж)', d.feed_gender)}
       </div>
       <div class="err" id="d-err" hidden></div>
-      <div class="bar"><button class="btn" id="d-save">Сохранить</button></div>`;
+      <div class="bar save"><button class="btn" id="d-save">Сохранить</button></div>`;
     $('d-back').onclick = () => editEvent(eid);
     $('d-save').onclick = async () => {
       const body = {
@@ -822,7 +871,7 @@
           <textarea id="w-desc">${esc(w.description)}</textarea></div>
       </div>
       <div class="err" id="w-err" hidden></div>
-      <div class="bar"><button class="btn" id="w-save">Сохранить</button></div>`;
+      <div class="bar save"><button class="btn" id="w-save">Сохранить</button></div>`;
 
     $('w-back').onclick = () => { box.innerHTML = prev; loadWods(eid, divs); };
     $('w-save').onclick = async () => {
@@ -953,7 +1002,7 @@
           <div class="bar"><button class="btn quiet" id="h-add">Добавить дорожку</button></div>
         </div>
       </div>
-      <div class="bar"><button class="btn" id="h-save">Сохранить</button></div>`;
+      <div class="bar save"><button class="btn" id="h-save">Сохранить</button></div>`;
 
     // селекты заполняем после вставки: value у option ставится только так
     [...box.querySelectorAll('#h-lanes .row-lane')].forEach((row, i) => {
@@ -1036,7 +1085,7 @@
       <div class="muted">Общие пункты — регистрация, перерыв, награждение — оставляйте
         без категории.</div>
       <div class="err" id="s-err" hidden></div>
-      <div class="bar"><button class="btn" id="s-save">Сохранить</button></div>`;
+      <div class="bar save"><button class="btn" id="s-save">Сохранить</button></div>`;
     $('s-back').onclick = () => loadSchedule(eid, divs);
     $('s-save').onclick = async () => {
       const body = {
@@ -1213,6 +1262,10 @@
           <option value="organizer">Организатор</option>
         </select></div>
       </div>
+      <div class="muted" style="margin-top:8px">${ROLE === 'organizer'
+        ? 'Введите точный @username или tg_id человека'
+        : 'Найдите человека по имени, @username или tg_id'} — в результатах появится
+        «Назначить». Найти можно только того, кто хотя бы раз открывал приложение.</div>
       <div id="st-found"></div>`;
 
     box.querySelectorAll('[data-off]').forEach(b => b.onclick = async () => {
@@ -1415,7 +1468,7 @@
         </select></div>
       </div>
       <div class="err" id="n-err" hidden></div>
-      <div class="bar"><button class="btn" id="n-save">Сохранить</button></div>
+      <div class="bar save"><button class="btn" id="n-save">Сохранить</button></div>
       ${id ? `
       <div class="imgs">
         <div class="img-slot banner">
