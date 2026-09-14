@@ -157,6 +157,61 @@
     .warn { background:var(--plate); border-radius:10px; padding:14px 16px;
       margin-top:16px; color:var(--steel); }
     .warn b { color:var(--chalk); font-weight:500; }
+
+    /* ── Телефон ──
+       Организатор открывает админку из мини-аппа, то есть чаще всего с телефона.
+       Боковое меню становится полосой под шапкой, таблицы прокручиваются внутри
+       себя, а не растягивают страницу, поля — 16px: на меньшем iOS увеличивает
+       страницу при фокусе, и она «плывёт». */
+    @media (max-width: 760px) {
+      .top { padding:0 14px; gap:10px; height:52px; }
+      .top b { font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+      .top .muted { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:38vw; }
+      .wrap { display:block; }
+      .nav { position:sticky; top:52px; z-index:4; background:var(--void);
+        display:flex; gap:4px; padding:8px 14px; overflow-x:auto; scrollbar-width:none;
+        box-shadow:inset 0 -1px 0 var(--hair); }
+      .nav::-webkit-scrollbar { display:none; }
+      .nav button { width:auto; flex:none; white-space:nowrap; padding:8px 12px; }
+      .main { padding:16px 14px 60px; }
+
+      h2 { font-size:18px; }
+      .row-between { flex-wrap:wrap; gap:10px; }
+      .bar { flex-wrap:wrap; }
+
+      /* таблица сама себе прокрутка: страница по ширине не едет */
+      table { display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      td, th { white-space:nowrap; }
+      td { padding:10px 8px; }
+
+      .etabs { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; margin:18px -14px 16px;
+        padding:0 14px; }
+      .etabs::-webkit-scrollbar { display:none; }
+      .etab { flex:none; white-space:nowrap; padding:10px 11px; }
+
+      /* Сетка результатов: место и имя стоят на месте, комплексы едут под ними —
+         иначе, листая вправо к третьему комплексу, судья не видит, чей результат вводит */
+      .grid-res th:nth-child(1), .grid-res td:nth-child(1),
+      .grid-res th:nth-child(2), .grid-res td:nth-child(2) {
+        position:sticky; z-index:1; background:var(--void); }
+      .grid-res th:nth-child(1), .grid-res td:nth-child(1) {
+        left:0; width:34px; min-width:34px; max-width:34px; padding-left:4px; padding-right:4px; }
+      .grid-res th:nth-child(2), .grid-res td:nth-child(2) {
+        left:34px; max-width:118px; overflow:hidden; text-overflow:ellipsis;
+        box-shadow:inset 0 -1px 0 var(--hair), inset -1px 0 0 var(--hair); }
+
+      .grid { grid-template-columns:1fr; gap:12px; }
+      .f input, .f select, .f textarea, .grid-res input.val, input, select, textarea { font-size:16px; }
+      .row-lane .le { max-width:none; min-width:0; }
+
+      .img-slot { flex:1 1 100%; }
+      .img-slot.banner .prev { width:100%; height:auto; aspect-ratio:16/9; }
+      .ready .val { font-size:12px; }
+
+      .login { padding:16px; }
+      .login form { width:100%; max-width:340px; padding:22px; }
+      .toast { left:14px; right:14px; bottom:14px; text-align:center; }
+    }
   </style>
 </head>
 <body>
