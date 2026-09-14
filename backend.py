@@ -259,6 +259,14 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_pending
     ON notifications (status, id) WHERE status = 'pending';
+-- send_after — придержать письмо (сводка организатору не чаще раза в час);
+-- dedup — не повторить (письмо о снятии за неоплату);
+-- meta — что собрано в сводку.
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS send_after TIMESTAMPTZ;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedup TEXT;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}';
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedup
+    ON notifications (dedup) WHERE dedup IS NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE;
 -- Когда человек сам вошёл через Telegram (подпись initData проверена). Бот
 -- пишет только таким: у сгенерированных сидом и fill_event пользователей
@@ -1223,23 +1231,8 @@ async def h_entry_create(r):
                      f"Категория: {esc_html(d['name'])}{money_line}",
                      f"event_{eid}")
 
-        # Организаторам — что пришёл человек. Судьям не шлём: набор заявок
-        # не их дело, а лишнее письмо в день старта только мешает.
-        who = u["name"] or "Без имени"
-        total = await c.fetchval(
-            "SELECT COUNT(*) FROM entries WHERE event_id=$1 AND status='active'", eid)
-        for row in await c.fetch(
-                """SELECT user_id FROM event_staff
-                   WHERE event_id=$1 AND role='organizer'""", eid):
-            # своя заявка организатора — не новость для него самого:
-            # расписку он уже получил выше, второе письмо было бы шумом
-            if row["user_id"] == u["id"]:
-                continue
-            await notify(c, row["user_id"], "entry_new",
-                         f"<b>Новая заявка</b>\n{esc_html(ev['title'])}\n"
-                         f"{esc_html(who)} — {esc_html(d['name'])}\n"
-                         f"Активных заявок: {total}",
-                         f"event_{eid}")
+        # Организаторам — о новой заявке, сводкой не чаще раза в час на старт
+        await notify_new_entry(c, eid, entry_id, u["id"])
     return _json({"entry_id": entry_id, "division_id": did, "division": d["name"],
                   "pay_due": str(due)})
 
@@ -1264,11 +1257,15 @@ def esc_html(t):
 
 
 
-async def notify(c, user_id, kind, text, link=""):
+async def notify(c, user_id, kind, text, link="", dedup=None):
     """Кладём письмо в очередь. Отправкой занимается фоновая задача:
-    подача заявки не должна ждать телеграм и падать вместе с ним."""
+    подача заявки не должна ждать телеграм и падать вместе с ним.
+
+    Возвращает, легло ли письмо. False — человек не входил через Telegram,
+    выключил уведомления или письмо с таким dedup уже было.
+    """
     if not user_id:
-        return
+        return False
     # Пишем только тем, кто сам входил через Telegram и не выключил уведомления.
     # Проверенность важнее, чем кажется: у сгенерированных пользователей tg_id
     # могут принадлежать посторонним, и «Новая заявка — Павел Ольховик» ушла бы
@@ -1277,10 +1274,88 @@ async def notify(c, user_id, kind, text, link=""):
     ok = await c.fetchval(
         "SELECT notify AND tg_verified_at IS NOT NULL FROM users WHERE id=$1", user_id)
     if not ok:
-        return
-    await c.execute(
-        """INSERT INTO notifications (user_id, kind, text, link)
-           VALUES ($1,$2,$3,$4)""", user_id, kind, text, link)
+        return False
+    got = await c.fetchval(
+        """INSERT INTO notifications (user_id, kind, text, link, dedup)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (dedup) WHERE dedup IS NOT NULL DO NOTHING
+           RETURNING id""", user_id, kind, text, link, dedup)
+    return got is not None
+
+
+async def _new_entries_text(c, event_id, ids):
+    """Текст письма о новых заявках: одна — подробно, несколько — списком."""
+    title = await c.fetchval("SELECT title FROM events WHERE id=$1", event_id)
+    rows = await c.fetch(
+        """SELECT en.id, en.team_name, d.name AS division,
+                  ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members
+           FROM entries en
+           JOIN divisions d ON d.id = en.division_id
+           JOIN entry_members m ON m.entry_id = en.id
+           JOIN users u ON u.id = m.user_id
+           WHERE en.id = ANY($1::int[])
+           GROUP BY en.id, en.team_name, d.name ORDER BY en.id""", ids)
+    total = await c.fetchval(
+        "SELECT COUNT(*) FROM entries WHERE event_id=$1 AND status='active'", event_id)
+
+    def who(r):
+        members = list(r["members"] or [])
+        return esc_html(r["team_name"] or (members[0] if members else "Без имени"))
+
+    if len(rows) == 1:
+        r = rows[0]
+        return (f"<b>Новая заявка</b>\n{esc_html(title)}\n"
+                f"{who(r)} — {esc_html(r['division'])}\n"
+                f"Активных заявок: {total}")
+    shown = "\n".join(f"· {who(r)} — {esc_html(r['division'])}" for r in rows[:15])
+    more = f"\n…и ещё {len(rows) - 15}" if len(rows) > 15 else ""
+    return (f"<b>Новые заявки: {len(rows)}</b>\n{esc_html(title)}\n"
+            f"{shown}{more}\nАктивных заявок: {total}")
+
+
+async def notify_new_entry(c, event_id, entry_id, actor_id):
+    """Организаторам — о новой заявке, но не письмом на каждую.
+
+    Первая заявка приходит сразу. Если этому организатору по этому старту
+    письмо уже уходило в последний час, новые заявки копятся в одно
+    отложенное, и к концу часа приходит сводка: на большом старте это одно
+    сообщение вместо сотни. Судьям не пишем — набор заявок не их дело.
+    """
+    link = f"event_{event_id}"
+    orgs = await c.fetch(
+        """SELECT s.user_id FROM event_staff s JOIN users u ON u.id = s.user_id
+           WHERE s.event_id=$1 AND s.role='organizer'
+             AND u.notify AND u.tg_verified_at IS NOT NULL""", event_id)
+    for o in orgs:
+        uid = o["user_id"]
+        # своя заявка организатора — не новость для него самого
+        if uid == actor_id:
+            continue
+        waiting = await c.fetchrow(
+            """SELECT id, meta FROM notifications
+               WHERE user_id=$1 AND kind='entry_new' AND link=$2 AND status='pending'
+               ORDER BY id DESC LIMIT 1""", uid, link)
+        if waiting:
+            meta = waiting["meta"]
+            meta = json.loads(meta) if isinstance(meta, str) else (meta or {})
+            ids = list(meta.get("entries", [])) + [entry_id]
+            merged = await c.fetchval(
+                """UPDATE notifications SET meta=$2, text=$3
+                   WHERE id=$1 AND status='pending' RETURNING id""",
+                waiting["id"], json.dumps({"entries": ids}),
+                await _new_entries_text(c, event_id, ids))
+            if merged:
+                continue
+            # письмо успело уйти, пока собирали, — заводим новое
+        after = await c.fetchval(
+            """SELECT MAX(sent_at) + interval '1 hour' FROM notifications
+               WHERE user_id=$1 AND kind='entry_new' AND link=$2 AND status='sent'
+                 AND sent_at > NOW() - interval '1 hour'""", uid, link)
+        await c.execute(
+            """INSERT INTO notifications (user_id, kind, text, link, send_after, meta)
+               VALUES ($1,'entry_new',$2,$3,$4,$5)""",
+            uid, await _new_entries_text(c, event_id, [entry_id]), link, after,
+            json.dumps({"entries": [entry_id]}))
 
 
 async def _due_letters(c):
@@ -1297,7 +1372,9 @@ async def _due_letters(c):
     return await c.fetch(
         """SELECT n.id, n.text, n.link, n.tries, u.tg_id
            FROM notifications n JOIN users u ON u.id = n.user_id
-           WHERE n.status='pending' ORDER BY n.id LIMIT 20""")
+           WHERE n.status='pending'
+             AND (n.send_after IS NULL OR n.send_after <= NOW())
+           ORDER BY n.id LIMIT 20""")
 
 
 async def notify_loop(app):
@@ -1354,26 +1431,40 @@ async def _send_one(sess, n):
                WHERE id=$1""", n["id"], status, err)
 
 
-async def release_unpaid_loop(app):
-    """Освобождение мест по неоплаченным заявкам.
+async def release_unpaid_once():
+    """Один проход: снять просроченные неоплаченные заявки и сказать людям.
 
     Заявку не удаляем и не прячем: ставим `withdrawn` с причиной. Человек
-    должен увидеть, почему его сняли, а организатор — вернуть заявку одним
-    кликом, если деньги пришли позже. Письма о снятии пока нет: очередь
-    уведомлений уже есть, но о неоплате бот не сообщает — человек узнаёт
-    о снятии только в приложении.
+    узнаёт о снятии письмом, а не случайно в приложении, и знает, что делать,
+    если уже заплатил: организатор вернёт заявку одним кликом.
     """
+    async with db_pool.acquire() as c:
+        rows = await c.fetch(
+            """UPDATE entries SET status='withdrawn', withdraw_reason='unpaid'
+               WHERE status='active' AND payment_status='unpaid'
+                 AND pay_due IS NOT NULL AND pay_due < CURRENT_DATE
+               RETURNING id, event_id, division_id, pay_due""")
+        for r in rows:
+            ev = await c.fetchrow("SELECT title, telegram FROM events WHERE id=$1", r["event_id"])
+            div = await c.fetchval("SELECT name FROM divisions WHERE id=$1", r["division_id"])
+            contact = f"\n{esc_html(ev['telegram'])}" if ev["telegram"] else ""
+            text = (f"<b>Заявка снята</b>\n{esc_html(ev['title'])} · {esc_html(div or '')}\n"
+                    f"Оплата не пришла до {fmt_ru_date(r['pay_due'])}, место освобождено. "
+                    f"Если вы уже заплатили, напишите организатору — он вернёт заявку."
+                    f"{contact}")
+            for mem in await c.fetch("SELECT user_id FROM entry_members WHERE entry_id=$1", r["id"]):
+                await notify(c, mem["user_id"], "entry_released", text, f"event_{r['event_id']}",
+                             dedup=f"unpaid:{r['id']}:{mem['user_id']}:{r['pay_due']}")
+    return len(rows)
+
+
+async def release_unpaid_loop(app):
     await asyncio.sleep(30)
     while True:
         try:
-            async with db_pool.acquire() as c:
-                rows = await c.fetch(
-                    """UPDATE entries SET status='withdrawn', withdraw_reason='unpaid'
-                       WHERE status='active' AND payment_status='unpaid'
-                         AND pay_due IS NOT NULL AND pay_due < CURRENT_DATE
-                       RETURNING id""")
-            if rows:
-                logger.info("Снято за неоплату: %s заявок", len(rows))
+            n = await release_unpaid_once()
+            if n:
+                logger.info("Снято за неоплату: %s заявок", n)
         except Exception as e:
             logger.warning("Освобождение мест не сработало: %s", e)
         await asyncio.sleep(3600)
