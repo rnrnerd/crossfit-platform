@@ -61,6 +61,7 @@
     .brand { font-size:15px; font-weight:700; color:var(--accent); }
     /* логотип в шапке главной: высота строки заголовка, ширина от пропорций знака */
     .brand-logo { display:block; height:22px; width:auto; }
+    .back + .brand { margin-left:-6px; }
     /* Заставка — логотип на фоне, пока грузится первый экран */
     .splash { position:fixed; inset:0; z-index:100; background:var(--void);
       display:grid; place-items:center; transition:opacity .25s; }
@@ -950,34 +951,31 @@
 
     // ── Навигация ──
     const SCREENS = ['home','search','event','my','news','article','profile'];
-    const TITLES  = {home:'321.cf', search:'Поиск', my:'Мои соревнования',
-                     news:'Новости', profile:'Профиль'};
     let me = null, myIds = new Set();
 
-    function renderBar(name, innerTitle) {
+    // Шапка одна на всё приложение: логотип на каждом экране. Где экран открыт
+    // поверх другого (событие, новость), слева от логотипа — «назад». Название
+    // экрана шапка не повторяет: событие и новость называют себя в теле
+    // страницы, а раздел показывает нижнее меню.
+    const LOGO = `<img class="brand-logo" src="/assets/brand/logo.png" alt="321.cf" width="90" height="22">`;
+    function renderBar(name) {
       // профиль не заполнен — это блокирует подачу заявки, поэтому кнопка
       // об этом сообщает, а не молчит
       const todo = me && !me.error && !me.profile_complete;
       const avatar = `<button class="ava${todo ? ' todo' : ''}" id="go-profile"
         aria-label="${todo ? 'Профиль не заполнен' : 'Профиль'}"><i>${me?.user?.avatar
         ? `<img src="${esc(me.user.avatar)}" alt="">` : esc(initials(me?.user?.name))}</i></button>`;
-      if (name === 'event' || name === 'article') {
-        $('bar').innerHTML = `
-          <button class="back" id="go-back" aria-label="Назад">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M15 5l-7 7 7 7"/></svg>
-          </button>
-          <h2>${esc(innerTitle || '')}</h2>`;
-        $('go-back').onclick = () => show(backTo);
-      } else {
-        const brand = name === 'home'
-          ? `<img class="brand-logo" src="/assets/brand/logo.png" alt="321.cf" width="90" height="22">`
-          : TITLES[name];
-        $('bar').innerHTML = `<div class="brand">${brand}</div>${avatar}`;
-        const go = $('go-profile');
-        if (go) go.onclick = () => show('profile');
-      }
+      const back = name === 'event' || name === 'article';
+      $('bar').innerHTML = `
+        ${back ? `<button class="back" id="go-back" aria-label="Назад">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 5l-7 7 7 7"/></svg>
+        </button>` : ''}
+        <div class="brand">${LOGO}</div>${avatar}`;
+      if (back) $('go-back').onclick = () => show(backTo);
+      const go = $('go-profile');
+      if (go) go.onclick = () => show('profile');
     }
 
     let backTo = 'home';
