@@ -117,6 +117,23 @@
     .dots i { width:6px; height:6px; border-radius:50%; background:var(--steel); opacity:.4; }
     .dots i.on { background:var(--accent); opacity:1; }
 
+    /* ── Воздух главной ──
+       Ритм на шаге 4: между разделами 44, от заголовка до слайдера 20,
+       между карточками 16, внутри карточки 12 — от афиши до текста и до тегов.
+       Заголовок раздела крупнее заголовка карточки: иначе разделы не читаются
+       и экран сливается в одну ленту. Только главная — у события и поиска
+       своя плотность. */
+    #screen-home .h { font-size:20px; letter-spacing:-.02em; padding:44px var(--pad) 14px; }
+    #screen-home .h.tight { padding-bottom:6px; }
+    #screen-home .rail { gap:16px; padding:20px var(--pad) 4px; }
+    #screen-home .card .state { margin-top:12px; }
+    #screen-home .card-title { margin-top:6px; }
+    #screen-home .card .meta { margin-top:4px; }
+    #screen-home .tags.sm { margin-top:12px; }
+    #screen-home .slide-txt { padding:16px var(--pad) 0; }
+    #screen-home .slide-title { margin-top:6px; }
+    #screen-home .dots { padding:18px 0 0; }
+
     /* ── Лента поиска: карточек нет, строку отбивает сама афиша ── */
     .feed-item { display:block; width:100%; text-align:left; background:none; border:none;
       cursor:pointer; padding:0 0 30px; }
@@ -638,7 +655,7 @@
     <div id="home-events"></div>
     <div class="h">Прошедшие</div>
     <div id="home-past"></div>
-    <div style="height:24px"></div>
+    <div style="height:48px"></div>
   </section>
 
   <section class="screen" id="screen-search">
