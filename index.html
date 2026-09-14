@@ -4,7 +4,12 @@
   <meta charset="UTF-8" />
   <!-- зум не блокируем: протокол читают в шуме, на бегу и не всегда своими глазами -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Кроссфит-платформа</title>
+  <title>321.cf</title>
+  <meta name="theme-color" content="#08090a" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/icon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/brand/icon-192.png" />
+  <link rel="apple-touch-icon" href="/assets/brand/icon-180.png" />
+  <link rel="preload" as="image" href="/assets/brand/logo.png" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet" />
@@ -54,6 +59,13 @@
     .bar h2 { font-size:15px; font-weight:700; line-height:1.2;
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .brand { font-size:15px; font-weight:700; color:var(--accent); }
+    /* логотип в шапке главной: высота строки заголовка, ширина от пропорций знака */
+    .brand-logo { display:block; height:22px; width:auto; }
+    /* Заставка — логотип на фоне, пока грузится первый экран */
+    .splash { position:fixed; inset:0; z-index:100; background:var(--void);
+      display:grid; place-items:center; transition:opacity .25s; }
+    .splash img { width:min(56vw, 240px); height:auto; }
+    .splash.out { opacity:0; pointer-events:none; }
     .back { flex:none; width:44px; height:44px; margin-left:-12px; border:none;
       background:none; display:grid; place-items:center; cursor:pointer; }
     /* Кнопка профиля. Раньше это был <div> без обработчика: выглядел как
@@ -646,6 +658,9 @@
   </style>
 </head>
 <body>
+  <!-- Заставка: логотип, пока грузится первый экран. Уходит, как только главная
+       получила данные, и не позже чем через 2,5 с — пустым местом не держим. -->
+  <div class="splash" id="splash" aria-hidden="true"><img src="/assets/brand/logo.png" alt=""></div>
   <header class="bar" id="bar"></header>
 
   <section class="screen visible" id="screen-home">
@@ -917,9 +932,25 @@
       ? `<img src="/api/event-banner/${ev.id}?v=${ev.banner_v}" alt="" loading="lazy">`
       : `<div class="stub" aria-hidden="true">${esc(ev.title)}</div>`;
 
+    // Заставка уходит, когда главная получила данные (loadHome ставит data-ready),
+    // или по таймеру: если по ссылке открыли сразу событие, главная не грузится.
+    (() => {
+      const sp = $('splash');
+      if (!sp) return;
+      let gone = false;
+      const hide = () => {
+        if (gone) return;
+        gone = true;
+        sp.classList.add('out');
+        setTimeout(() => sp.remove(), 300);
+      };
+      new MutationObserver(hide).observe($('home-events'), {attributes: true, attributeFilter: ['data-ready']});
+      setTimeout(hide, 2500);
+    })();
+
     // ── Навигация ──
     const SCREENS = ['home','search','event','my','news','article','profile'];
-    const TITLES  = {home:'Кроссфит-платформа', search:'Поиск', my:'Мои соревнования',
+    const TITLES  = {home:'321.cf', search:'Поиск', my:'Мои соревнования',
                      news:'Новости', profile:'Профиль'};
     let me = null, myIds = new Set();
 
@@ -940,7 +971,10 @@
           <h2>${esc(innerTitle || '')}</h2>`;
         $('go-back').onclick = () => show(backTo);
       } else {
-        $('bar').innerHTML = `<div class="brand">${TITLES[name]}</div>${avatar}`;
+        const brand = name === 'home'
+          ? `<img class="brand-logo" src="/assets/brand/logo.png" alt="321.cf" width="90" height="22">`
+          : TITLES[name];
+        $('bar').innerHTML = `<div class="brand">${brand}</div>${avatar}`;
         const go = $('go-profile');
         if (go) go.onclick = () => show('profile');
       }

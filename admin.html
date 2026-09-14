@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Админка — Кроссфит-платформа</title>
+  <title>Админка — 321.cf</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/icon-32.png" />
+  <link rel="apple-touch-icon" href="/assets/brand/icon-180.png" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <style>
@@ -29,12 +31,17 @@
     .login form { width:340px; background:var(--plate); border-radius:14px; padding:26px; }
     .login h1 { font-size:19px; font-weight:700; letter-spacing:-.02em; }
     .login p { color:var(--steel); margin:6px 0 20px; }
+    .login-logo { display:block; height:26px; width:auto; margin:0 0 22px; }
+    .login h1 { margin-bottom:18px; }
+    /* поле на карточке входа: карточка сама --plate, поле того же тона исчезало */
+    .login .f input { background:var(--plate2); }
 
     /* ── Каркас ── */
     .top { display:flex; align-items:center; gap:16px; padding:0 22px; height:56px;
       box-shadow:inset 0 -1px 0 var(--hair); position:sticky; top:0; background:var(--void); z-index:5; }
     .top b { font-size:15px; font-weight:700; color:var(--accent); }
     .top .sp { flex:1; }
+    .top-logo { display:block; height:20px; width:auto; flex:none; }
     .wrap { display:grid; grid-template-columns:200px 1fr; align-items:start; }
     .nav { padding:18px 12px; position:sticky; top:56px; }
     .nav button { display:block; width:100%; text-align:left; background:none; border:none;
@@ -242,8 +249,8 @@
 
 <div class="login" id="login">
   <form id="login-form">
+    <img class="login-logo" src="/assets/brand/logo.png" alt="321.cf">
     <h1>Админка</h1>
-    <p class="muted">Кроссфит-платформа</p>
     <div class="f">
       <label for="pw">Пароль</label>
       <input id="pw" type="password" autocomplete="current-password" autofocus />
@@ -255,7 +262,7 @@
 
 <div id="app" hidden>
   <div class="top">
-    <b>Кроссфит-платформа</b>
+    <img class="top-logo" src="/assets/brand/logo.png" alt="321.cf">
     <span class="sp"></span>
     <span class="muted" id="whoami">админка</span>
     <button class="btn link" id="logout">Выйти</button>

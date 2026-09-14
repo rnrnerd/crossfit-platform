@@ -10,7 +10,9 @@ canvas/
 canvas-v2/
 canvas-v3/
 shots/
-assets/
+assets/*
+# логотип и иконки платформы — в репозитории, остальное в assets локальное
+!assets/brand/
 pitch.html
 *.pdf
 
