@@ -417,10 +417,14 @@ async def current_user(request):
         if row:
             # Отметка «сам входил через Telegram» — только при проверенной подписи
             # и один раз, а не на каждый запрос. DEV-вход её не получает никогда.
-            if tg and row["tg_verified_at"] is None:
+            # username в Telegram меняют, а заводят и после первого входа —
+            # без обновления человека не найти по @ в админке
+            if tg and (row["tg_verified_at"] is None or (row["username"] or "") != username):
                 row = await c.fetchrow(
-                    "UPDATE users SET tg_verified_at=NOW() WHERE id=$1 RETURNING *",
-                    row["id"])
+                    """UPDATE users SET tg_verified_at = COALESCE(tg_verified_at, NOW()),
+                              username = $2
+                       WHERE id=$1 RETURNING *""",
+                    row["id"], username)
             return dict(row)
         row = await c.fetchrow(
             """INSERT INTO users (tg_id, username, name, tg_verified_at)
@@ -2500,8 +2504,12 @@ async def a_users(r):
     q = _clean(r.query.get("q"), 80)
     if len(q) < 2:
         return _json([])
-    like = f"%{q.lower()}%"
-    digits = q.lstrip("@") if q.lstrip("@").isdigit() else None
+    # «@name» ищем как «name»: в базе username хранится без собаки
+    term = q.lstrip("@").strip()
+    if len(term) < 2:
+        return _json([])
+    like = f"%{term.lower()}%"
+    digits = term if term.isdigit() else None
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT id, name, username, city, tg_id FROM users
