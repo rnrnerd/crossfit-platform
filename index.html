@@ -335,27 +335,42 @@
        на отдельном экране: постоянно открытая форма читалась как «заполните
        меня», а не как профиль. Лайм — только на подписях и медалях: на своём
        профиле «это вы» всё, и зелёный экран ничего бы не выделял. */
-    .ath { display:flex; flex-direction:column; align-items:center; text-align:center;
-      padding:20px var(--pad) 0; }
-    .ath-ava { position:relative; width:96px; height:96px; border-radius:50%; flex:none;
+    /* Шапка атлета — во всю ширину. Фон — ваше же фото, размытое и притушенное
+       к --void: цвет на экране приносит сам человек, как афиша приносит его
+       событию. Без фото — тёмный градиент и слабое лаймовое свечение за
+       аватаром. Кольцо лаймом — маркер «это вы», ради него акцент и существует. */
+    .ath { position:relative; isolation:isolate; overflow:hidden;
+      display:flex; flex-direction:column; align-items:center; text-align:center;
+      padding:34px var(--pad) 30px; margin-top:-1px;
+      background:radial-gradient(120% 70% at 50% 0%, rgba(168,204,58,.14), transparent 60%),
+                 linear-gradient(180deg, var(--plate) 0%, var(--void) 100%); }
+    .ath-bg { position:absolute; inset:-40px; z-index:-1; background-size:cover;
+      background-position:center; filter:blur(38px) saturate(1.15); opacity:.55; }
+    .ath-bg::after { content:''; position:absolute; inset:0;
+      background:linear-gradient(180deg, rgba(8,9,10,.25) 0%, rgba(8,9,10,.7) 55%, var(--void) 100%); }
+    .ath-ava { position:relative; width:132px; height:132px; border-radius:50%; flex:none;
       background:var(--plate); border:none; padding:0; cursor:pointer;
-      font-size:30px; font-weight:800; color:var(--steel); letter-spacing:-.02em; }
+      font-size:42px; font-weight:800; color:var(--chalk); letter-spacing:-.03em;
+      box-shadow:0 0 0 3px var(--void), 0 0 0 6px var(--accent), 0 18px 48px rgba(0,0,0,.55); }
     .ath-pic { width:100%; height:100%; border-radius:50%; overflow:hidden;
-      display:grid; place-items:center; }
+      display:grid; place-items:center;
+      background:linear-gradient(160deg, #23262b, var(--plate)); }
     .ath-pic img { width:100%; height:100%; object-fit:cover; }
-    .ath-cam { position:absolute; right:0; bottom:0; width:30px; height:30px; border-radius:50%;
+    .ath-cam { position:absolute; right:2px; bottom:2px; width:36px; height:36px; border-radius:50%;
       background:var(--chalk); color:var(--void); display:grid; place-items:center;
-      box-shadow:0 0 0 3px var(--void); }
+      box-shadow:0 0 0 4px var(--void); }
     .ath-ava:active .ath-pic { opacity:.8; }
-    .ath-name { font-size:26px; font-weight:700; line-height:1.15; letter-spacing:-.025em;
-      margin-top:16px; }
-    .ath-sub { font-size:14px; color:var(--steel); margin-top:5px; }
+    .ath-name { font-size:30px; font-weight:800; line-height:1.1; letter-spacing:-.035em;
+      margin-top:22px; text-wrap:balance; }
+    .ath-sub { font-size:15px; color:var(--steel); margin-top:7px; }
+    .ath-sub b { color:var(--chalk); font-weight:500; }
     .btn.ath-edit { display:inline-flex; align-items:center; justify-content:center;
-      width:auto; min-height:44px; padding:0 20px; margin-top:16px; font-size:14px; font-weight:600; }
+      width:auto; min-height:44px; padding:0 22px; margin-top:20px; font-size:14px; font-weight:600;
+      background:rgba(255,255,255,.08); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
 
     /* плитки: параметры атлета и сводка по стартам — три значения в ряд */
     .tiles { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px;
-      padding:24px var(--pad) 0; }
+      padding:4px var(--pad) 0; }
     .tile { background:var(--plate); border-radius:12px; padding:14px 12px; min-width:0; }
     .tile b { display:block; font-size:20px; font-weight:700; line-height:1.15; letter-spacing:-.02em;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -471,8 +486,7 @@
     .sheet-foot { padding:14px var(--pad) 22px; display:grid; gap:10px; }
     /* фильтры поиска: группа = заголовок цветом бренда + чипы, группы разделены линией */
     .fgroup { padding:16px var(--pad) 18px; box-shadow:inset 0 -1px 0 var(--hair); }
-    .fgroup-h { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
-      color:var(--accent); margin-bottom:10px; }
+    .fgroup-h { font-size:14px; font-weight:700; color:var(--accent); margin-bottom:10px; }
     .fchips { display:flex; flex-wrap:wrap; gap:8px; }
     .fchip { font:inherit; font-size:14px; font-weight:500; color:var(--chalk); cursor:pointer;
       background:rgba(255,255,255,.06); border:none; border-radius:999px; padding:9px 14px; }
@@ -2355,16 +2369,17 @@
         .sort((a, b) => String(a.date_start).localeCompare(String(b.date_start)))[0];
       box.innerHTML = `
         <div class="ath">
+          ${u.avatar ? `<div class="ath-bg" style="background-image:url('${esc(u.avatar)}')" aria-hidden="true"></div>` : ''}
           <button class="ath-ava" id="p-photo" aria-label="Сменить фото">
             <span class="ath-pic">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(initials(u.name))}</span>
             <span class="ath-cam" aria-hidden="true">${CAMERA}</span>
           </button>
           <div class="ath-name">${esc(u.name || 'Без имени')}</div>
-          <div class="ath-sub">${esc([u.club || 'Независимый атлет', u.city].filter(Boolean).join(' · '))}</div>
+          <div class="ath-sub"><b>${esc(u.club || 'Независимый атлет')}</b>${u.city ? ` · ${esc(u.city)}` : ''}</div>
           <button class="btn quiet ath-edit" id="p-edit">Изменить профиль</button>
         </div>
         ${!me.profile_complete ? `
-          <div class="notice" style="margin-top:24px">
+          <div class="notice" style="margin:4px var(--pad) 20px">
             <b>Профиль не заполнен</b>
             Имя и пол нужны, чтобы подать заявку на старт.
             <button class="btn" id="p-fill">Заполнить профиль</button>
