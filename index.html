@@ -233,7 +233,7 @@
     .article .lead { color:var(--steel); }
 
     /* ── Экран события ── */
-    .ev-head { padding:18px var(--pad) 0; }
+    .ev-head { padding:0 var(--pad); position:relative; }
     .mark { width:56px; height:56px; border-radius:50%; background:var(--plate);
       display:grid; place-items:center; overflow:hidden;
       font-size:19px; font-weight:800; color:var(--steel); }
@@ -242,6 +242,50 @@
     .ev-title { font-size:26px; font-weight:700; line-height:1.15; letter-spacing:-.025em; margin-top:14px; }
     .ev-place { font-size:15px; color:var(--steel); margin-top:6px; }
     .ev-desc { font-size:15px; color:var(--chalk); margin-top:16px; white-space:pre-line; }
+
+    /* ── Обзор события ──
+       Шапка: знак наезжает на нижний край афиши — афиша и название читаются
+       одним объектом, а не двумя строками. Под названием место со значком
+       и уровни категорий цветными чипами: «мой ли это старт» решается здесь. */
+    .ov-head .mark { width:76px; height:76px; margin-top:-38px; font-size:26px;
+      box-shadow:0 0 0 4px var(--void); position:relative; z-index:1; }
+    .ov-head .ev-title { font-size:30px; font-weight:800; letter-spacing:-.035em; margin-top:16px;
+      text-wrap:balance; }
+    .ov-head .ev-place { display:flex; align-items:center; gap:6px; margin-top:8px; }
+    .ov-head .ev-place svg { flex:none; color:var(--steel); }
+    .ov-head .tag-set { margin-top:14px; }
+    .ov-head .tag { font-size:12px; padding:5px 9px; border-radius:7px; }
+
+    /* Карточка главного факта: срок, цена и действие в одном месте —
+       всё, что нужно для решения «подаваться или нет». Вложенные блоки
+       заявки и уведомлений теряют свою подложку: карточка уже подложка. */
+    .fact { margin:28px var(--pad) 0; background:var(--plate); border-radius:16px; padding:18px; }
+    .fact .hero { padding:0; }
+    .fact .hero-fee { margin-top:14px; padding-top:14px; box-shadow:inset 0 1px 0 var(--hair); }
+    .fact-act { margin-top:16px; }
+    .fact-act:empty { display:none; }
+    .fact-act .pad { padding:0; }
+    .fact-act .notice, .fact-act .entry { margin:0; padding:16px 0 0; background:none; border-radius:0;
+      box-shadow:inset 0 1px 0 var(--hair); }
+
+    /* Низ обзора — по сетке главной: разделы через 44px, заголовок 20px.
+       «Категории» и «Даты» — одна подложка: это справка о старте, а не два
+       отдельных раздела. Организатор — карточка с иконками. */
+    .ov .h.sec { font-size:20px; letter-spacing:-.02em; padding:44px var(--pad) 14px; }
+    .ov-desc { padding:28px var(--pad) 0; font-size:15px; line-height:1.6; white-space:pre-line; }
+    .ov-info { margin:0 var(--pad); background:var(--plate); border-radius:16px; overflow:hidden; }
+    .ov-info .h { padding:16px; font-size:15px; }
+    .ov-info .h + .h, .ov-info .rows + .h { box-shadow:inset 0 1px 0 var(--hair); }
+    .ov-info .rows { margin:0; }
+    .ov-info .row { padding:13px 16px; box-shadow:inset 0 1px 0 var(--hair); }
+    .ov-info .note { padding:0 16px 16px; text-align:left; font-size:14px; }
+    .ov .links { flex-direction:column; gap:8px; }
+    .ov .links a { display:flex; align-items:center; gap:12px; justify-content:flex-start;
+      min-height:56px; padding:0 16px; border-radius:14px; }
+    .ov .links a .ic { width:32px; height:32px; border-radius:9px; display:grid; place-items:center;
+      flex:none; background:rgba(255,255,255,.07); }
+    .ov .links a b { flex:1; font-weight:500; }
+    .ov .links a .go { color:var(--steel); }
 
     /* ── Мои соревнования ── */
     .my-row { display:flex; align-items:flex-start; gap:14px; width:100%; text-align:left;
@@ -1518,40 +1562,59 @@
       ].filter(([, v]) => v).map(([k, v]) =>
         `<div class="row"><div class="row-main">${esc(k)}</div><div class="row-val num">${esc(v)}</div></div>`).join('');
 
+      const go = `<svg class="go" width="8" height="12" viewBox="0 0 8 12" fill="none" stroke="currentColor"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 1 6.5 6 1.5 11"/></svg>`;
+      const icTg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linejoin="round"><path d="M21 4 3 11l6 2 2 6 3-4 5 4z"/><path d="m9 13 7-5"/></svg>`;
+      const icIg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="5"/><circle cx="12" cy="12" r="3.6"/><circle cx="16.8" cy="7.2" r=".9" fill="currentColor"/></svg>`;
+      const link = (url, ic, label) => `<a href="${esc(url)}" target="_blank" rel="noopener">
+        <span class="ic">${ic}</span><b>${label}</b>${go}</a>`;
       const links = [
-        ev.telegram  ? `<a href="${esc(ev.telegram)}" target="_blank" rel="noopener">Telegram</a>` : '',
-        ev.instagram ? `<a href="${esc(ev.instagram)}" target="_blank" rel="noopener">Instagram</a>` : '',
+        ev.telegram  ? link(ev.telegram, icTg, 'Telegram') : '',
+        ev.instagram ? link(ev.instagram, icIg, 'Instagram') : '',
       ].filter(Boolean).join('');
 
+      const pin = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`;
+      const levels = LEVELS.filter(([k]) => list.some(d => d.level === k))
+        .map(([k, label]) => `<span class="tag lv-${k}">${label}</span>`).join('');
+
       box.innerHTML = `
+        <div class="ov">
         <div class="art">${artHTML(ev)}</div>
-        <div class="ev-head">
+        <div class="ev-head ov-head">
           <div class="mark">${markHTML(ev)}</div>
           <h1 class="ev-title">${esc(ev.title)}</h1>
-          ${place ? `<div class="ev-place">${esc(place)}</div>` : ''}
+          ${place ? `<div class="ev-place">${pin}${esc(place)}</div>` : ''}
+          ${levels ? `<div class="tag-set">${levels}</div>` : ''}
         </div>
 
-        <div class="hero">
-          <div class="hero-label${hero.live ? ' live' : ''}">${
-            hero.live ? '<i class="dot live"></i>' : ''}${esc(hero.label)}</div>
-          <div class="hero-value${
-            hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
-          }">${esc(hero.value)}</div>
-          ${feeLine(ev)}
+        <div class="fact">
+          <div class="hero">
+            <div class="hero-label${hero.live ? ' live' : ''}">${
+              hero.live ? '<i class="dot live"></i>' : ''}${esc(hero.label)}</div>
+            <div class="hero-value${
+              hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
+            }">${esc(hero.value)}</div>
+            ${feeLine(ev)}
+          </div>
+          <div class="fact-act">${actionBlock(ev)}</div>
         </div>
 
-        <div style="padding-top:22px">${actionBlock(ev)}</div>
+        ${ev.description ? `<div class="ov-desc">${esc(ev.description)}</div>` : ''}
 
-        ${ev.description ? `<div class="pad"><p class="ev-desc">${esc(ev.description)}</p></div>` : ''}
-
-        ${divBlock}
-
-        ${dates ? `<button class="h h-toggle" aria-expanded="false"
-              aria-controls="dates-list">Даты проведения<span class="h-side"><span
-              class="h-sum">${esc(mainDates || qualDates)}</span>${chev}</span></button>
-            <div class="rows" id="dates-list" hidden>${dates}</div>` : ''}
-        ${links ? `<div class="h">Организатор</div><div class="pad links">${links}</div>` : ''}
-        <div style="height:32px"></div>`;
+        <div class="h sec">О старте</div>
+        <div class="ov-info">
+          ${divBlock}
+          ${dates ? `<button class="h h-toggle" aria-expanded="false"
+                aria-controls="dates-list">Даты проведения<span class="h-side"><span
+                class="h-sum">${esc(mainDates || qualDates)}</span>${chev}</span></button>
+              <div class="rows" id="dates-list" hidden>${dates}</div>` : ''}
+        </div>
+        ${links ? `<div class="h sec">Организатор</div><div class="pad links">${links}</div>` : ''}
+        <div style="height:40px"></div>
+        </div>`;
 
       wireActions(ev);
       box.querySelectorAll('.h-toggle').forEach(t => t.onclick = () => {
