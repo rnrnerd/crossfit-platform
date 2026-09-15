@@ -1325,9 +1325,9 @@
 
     // ── Главная ──
     const HOME_SEGS = [
-      ['open',  'Сбор заявок', isOpen],
+      ['open',  'Регистрация', isOpen],
       ['live',  'Идут',        isLive],
-      ['anons', 'Анонсы',      isAnnounced],
+      ['anons', 'Скоро',       isAnnounced],
     ];
     let homeSeg = 'open';
 
@@ -1410,7 +1410,7 @@
       if (!list.length) {
         box.innerHTML = `<div class="note tight">${
           {open:'Сейчас заявки никуда не собирают.', live:'Сейчас ничего не идёт.',
-           anons:'Новых анонсов пока нет.'}[homeSeg]}</div>`;
+           anons:'Скоро стартов пока не объявлено.'}[homeSeg]}</div>`;
         return;
       }
       box.innerHTML = `<div class="rail" aria-label="Соревнования">${list.map(cardHTML).join('')}</div>`;
@@ -2569,11 +2569,11 @@
     function partnerLine(p) {
       return `<button class="pt-line" data-pt="header">
         <i class="pt-logo">${ptLogo(p)}</i>
-        <span>По материалам ${esc(p.name)}</span>${CHEVRON}</button>`;
+        <span>Информационный партнёр ${esc(p.name)}</span>${CHEVRON}</button>`;
     }
     function partnerTag(p) {
       return `<span class="pt-tag" data-pt="preview" role="button" tabindex="0">
-        <i>${ptLogo(p)}</i>Новости из ${esc(p.name)}</span>`;
+        <i>${ptLogo(p)}</i>${esc(p.name)}</span>`;
     }
     function partnerCard(p, place, title, sub) {
       return `<button class="pt-card" data-pt="${place}">
