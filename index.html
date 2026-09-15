@@ -657,6 +657,15 @@
 
     /* ── Турнирный слой ── */
     .segs.sticky { position:sticky; top:var(--bar); z-index:9; background:var(--void); }
+    /* Вкладок события пять, и на телефоне они не помещались: полоса
+       прокручивалась вбок и ездила под пальцем. Теперь они стоят по всей
+       ширине, а кегль и поля подстраиваются под экран — 13,5px на 375px,
+       12,5px на самых узких. Упругий отскок отключён: если на совсем узком
+       экране полоса всё же не влезет, она прокрутится, но не запружинит. */
+    #ev-segs { gap:4px; justify-content:space-between; padding:0 clamp(12px, 4vw, 20px);
+      overscroll-behavior-x:none; }
+    #ev-segs .seg { font-size:clamp(12.5px, 3.6vw, 15px); }
+    #ev-segs .seg b { display:none; }
 
     /* строка выбора категории + прогресс комплексов */
     .pick { display:flex; align-items:center; justify-content:space-between; gap:12px;
