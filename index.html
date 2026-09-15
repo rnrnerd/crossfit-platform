@@ -666,6 +666,8 @@
       overscroll-behavior-x:none; }
     #ev-segs .seg { font-size:clamp(12.5px, 3.6vw, 15px); }
     #ev-segs .seg b { display:none; }
+    /* на 320px не хватало 9px: убираем промежутки и чуть поджимаем поля */
+    @media (max-width: 340px) { #ev-segs { gap:0; padding:0 10px; } }
 
     /* строка выбора категории + прогресс комплексов */
     .pick { display:flex; align-items:center; justify-content:space-between; gap:12px;
