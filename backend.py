@@ -1228,6 +1228,26 @@ def _gender_fits(division, user):
     return True
 
 
+async def _mixed_fits(c, entry_id, team_size, gender_rule, gender):
+    """Состав «МЖ»: в команде должен остаться хотя бы один человек другого пола.
+
+    Считаем тех, кто уже в составе, и тех, кого ждут по приглашению: иначе
+    капитан пары «МЖ» мог бы позвать второго мужчину, и место досталось бы
+    тому, кто ответит первым.
+    """
+    if gender_rule != "mixed" or team_size < 2 or not gender:
+        return True
+    same = await c.fetchval(
+        """SELECT COUNT(*) FROM (
+             SELECT u.gender FROM entry_members m JOIN users u ON u.id = m.user_id
+             WHERE m.entry_id = $1
+             UNION ALL
+             SELECT u.gender FROM team_invites i JOIN users u ON u.id = i.user_id
+             WHERE i.entry_id = $1 AND i.status = 'pending'
+           ) x WHERE x.gender = $2""", entry_id, gender)
+    return same + 1 <= team_size - 1
+
+
 def _avatar(uid, photo_v):
     return f"/api/photo/{uid}?v={photo_v}" if photo_v else ""
 
@@ -1711,7 +1731,8 @@ async def h_team_invite(r):
         if target["id"] == u["id"]:
             return _json({"error": "invite_self"}, status=409)
         d = await c.fetchrow("SELECT * FROM divisions WHERE id=$1", entry["division_id"])
-        if not _gender_fits(d, target):
+        if not _gender_fits(d, target) or not await _mixed_fits(
+                c, entry["id"], d["team_size"], d["gender_rule"], target["gender"]):
             return _json({"error": "gender_mismatch_member"}, status=409)
         if await _my_entry(c, ev["id"], target["id"]):
             return _json({"error": "invitee_registered"}, status=409)
@@ -1832,6 +1853,12 @@ async def h_invite_answer(r):
             return _json({"error": "profile_incomplete"}, status=409)
         if not _gender_fits(inv, u):
             return _json({"error": "gender_mismatch"}, status=409)
+        if inv["gender_rule"] == "mixed" and inv["team_size"] >= 2 and u["gender"]:
+            same = await c.fetchval(
+                """SELECT COUNT(*) FROM entry_members m JOIN users u ON u.id = m.user_id
+                   WHERE m.entry_id = $1 AND u.gender = $2""", inv["entry_id"], u["gender"])
+            if same + 1 > inv["team_size"] - 1:
+                return _json({"error": "gender_mismatch"}, status=409)
         if await _my_entry(c, ev["id"], u["id"]):
             return _json({"error": "already_registered"}, status=409)
         async with c.transaction():

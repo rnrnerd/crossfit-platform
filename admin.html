@@ -415,6 +415,9 @@
 
   const STATUS = {draft:'Черновик', registration:'Регистрация', live:'Идёт', finished:'Завершено'};
   const RULE = {any:'Любой', male:'Мужской', female:'Женский', mixed:'Микс'};
+  // У команд пол — это состав: «ММ», «МЖ», «ЖЖ». Так же и называем категорию
+  // в приложении: «Rx МЖ», а не «Пары микс».
+  const TEAM_RULE = {male:'ММ', mixed:'МЖ', female:'ЖЖ', any:'Любой состав'};
   const LEVEL = {'':'—', bg:'Bg', inter:'Inter', rx:'Rx', elite:'Elite'};
   const NEWSCAT = {'':'Без раздела', ru:'CF Россия', world:'CF Мир'};
   const fmtMoney = v => v ? String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽' : 'Бесплатно';
@@ -716,7 +719,7 @@
               <td><span class="tag${d.level ? ' lv-' + d.level : ''}">${
                 LEVEL[d.level] || d.level}</span></td>
               <td>${d.team_size > 1 ? `Команда ${d.team_size}` : 'Личный'}</td>
-              <td>${RULE[d.gender_rule] || d.gender_rule}</td>
+              <td>${(d.team_size > 1 ? TEAM_RULE : RULE)[d.gender_rule] || d.gender_rule}</td>
               <td class="num">${fmtMoney(d.price)}</td>
               <td class="num">${d.max_entries || '—'}</td>
               ${feed ? `<td>${d.feed_category
@@ -755,10 +758,7 @@
             `<option value="${k}"${d.level === k ? ' selected' : ''}>${v}</option>`).join('')}
         </select></div>
         ${F('d-team', 'Человек в команде (1 — личный зачёт)', d.team_size, 'number', 'min="1" max="12"')}
-        <div class="f"><label for="d-rule">Пол</label><select id="d-rule">
-          ${Object.entries(RULE).map(([k, v]) =>
-            `<option value="${k}"${d.gender_rule === k ? ' selected' : ''}>${v}</option>`).join('')}
-        </select></div>
+        <div class="f"><label for="d-rule">Пол</label><select id="d-rule"></select></div>
         ${F('d-price', 'Цена, ₽', d.price, 'number', 'min="0"')}
         ${F('d-limit', 'Лимит заявок (пусто — без лимита)', d.max_entries ?? '', 'number', 'min="1"')}
         ${F('d-ord', 'Порядок', d.ord, 'number', 'min="0"')}
@@ -768,6 +768,31 @@
       <div class="err" id="d-err" hidden></div>
       <div class="bar save"><button class="btn" id="d-save">Сохранить</button></div>`;
     $('d-back').onclick = () => editEvent(eid);
+    // Подписи пола зависят от размера команды. Название подставляем само,
+    // пока его не написали руками: «Rx МЖ», «Elite Мужчины».
+    const LVL_WORD = {bg:'Beginners', inter:'Intermediate', rx:'Rx', elite:'Elite'};
+    const autoName = () => {
+      const team = +$('d-team').value > 1, lvl = LVL_WORD[$('d-level').value] || '';
+      const rule = $('d-rule').value;
+      const tail = team ? TEAM_RULE[rule] : ({male:'Мужчины', female:'Женщины', mixed:'Микс', any:''})[rule];
+      return [lvl, rule === 'any' && team ? 'команды' : tail].filter(Boolean).join(' ');
+    };
+    let lastAuto = d.id ? null : autoName();
+    const fillRules = () => {
+      const labels = +$('d-team').value > 1 ? TEAM_RULE : RULE;
+      const cur = $('d-rule').value || d.gender_rule;
+      $('d-rule').innerHTML = ['any', 'male', 'mixed', 'female'].map(k =>
+        `<option value="${k}"${cur === k ? ' selected' : ''}>${labels[k]}</option>`).join('');
+    };
+    const sync = () => {
+      fillRules();
+      const n = $('d-name');
+      if (!n.value.trim() || n.value === lastAuto) { lastAuto = autoName(); n.value = lastAuto; }
+    };
+    fillRules();
+    if (!d.id) sync();
+    ['d-team', 'd-level', 'd-rule'].forEach(id => $(id).addEventListener('change', sync));
+    $('d-team').addEventListener('input', sync);
     $('d-save').onclick = async () => {
       const body = {
         event_id: eid, name: $('d-name').value, level: $('d-level').value,

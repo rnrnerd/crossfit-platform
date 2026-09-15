@@ -287,7 +287,7 @@ async def main():
             if tsize > 1:
                 did = await c.fetchval(
                     """INSERT INTO divisions (event_id,name,team_size,gender_rule,ord,price,level)
-                       VALUES ($1,'Команды микс',$2,'mixed',1,$3,'rx') RETURNING id""",
+                       VALUES ($1,'Rx МЖ',$2,'mixed',1,$3,'rx') RETURNING id""",
                     eid, tsize, price)
                 pairs = list(zip(OTHERS[:4], WOMEN[:4]))
                 for i, (m, w) in enumerate(pairs):
@@ -412,7 +412,7 @@ async def main():
         # ── Дивизионы ────────────────────────────────────────────────
         b_men   = await make_div(ev_battle, "Rx Мужчины", 1, "male", 1, 4500, "rx")
         b_women = await make_div(ev_battle, "Rx Женщины", 1, "female", 2, 4500, "rx")
-        b_pairs = await make_div(ev_battle, "Пары микс", 2, "mixed", 3, 8000, "rx")
+        b_pairs = await make_div(ev_battle, "Rx МЖ", 2, "mixed", 3, 8000, "rx")
         await make_div(ev_battle, "Intermediate Мужчины", 1, "male", 4, 3500, "inter")
         await make_div(ev_battle, "Elite Мужчины", 1, "male", 5, 6000, "elite")
         w_men   = await make_div(ev_winter, "Rx Мужчины", 1, "male", 1, 3000, "rx")

@@ -1554,12 +1554,18 @@
 
     const LVL_ORDER = ['bg', 'inter', 'rx', 'elite', 'other'];
     const LVL_NAME = {bg:'Bg', inter:'Inter', rx:'Rx', elite:'Elite', other:'Прочие'};
-    const GEN_NAME = {male:'Мужчины', female:'Женщины', mixed:'Микс', any:'Общая'};
+    // Командные категории — отдельные значения оси пола: «ММ» не должна
+    // смешиваться с личным «Мужчины», иначе мужская пара и одиночки попадали
+    // под один чип и фильтр переставал отвечать на вопрос «моя категория».
+    const GEN_NAME = {male:'Мужчины', female:'Женщины', mixed:'Микс', any:'Общая',
+                      mm:'ММ', mf:'МЖ', ff:'ЖЖ', team:'Команды'};
+    const TEAM_GEN = {male:'mm', mixed:'mf', female:'ff'};
 
     const divLevel = d => d.level || 'other';
+    const divGender = d => d.team_size > 1 ? (TEAM_GEN[d.gender_rule] || 'team') : d.gender_rule;
     function divsMatching(ev) {
       return (ev.divisions || []).filter(d =>
-        divLevel(d) === evLevel && d.gender_rule === evGender);
+        divLevel(d) === evLevel && divGender(d) === evGender);
     }
 
     // Фильтр всегда стоит на конкретной категории: «Все» из него убрано.
@@ -1571,7 +1577,7 @@
       const my = ev.my_entry && divs.find(d => d.id === ev.my_entry.division_id);
       const d = my || divs[0];
       evLevel = divLevel(d);
-      evGender = d.gender_rule;
+      evGender = divGender(d);
     }
 
     // Полосы фильтра. Ряд с единственным вариантом не рисуем, а выбор,
@@ -1580,7 +1586,9 @@
     function filterBar(ev) {
       const divs = ev.divisions || [];
       const levels = LVL_ORDER.filter(l => divs.some(d => divLevel(d) === l));
-      const genders = [...new Set(divs.map(d => d.gender_rule))];
+      // сначала личные оси, потом командные — в порядке ММ, МЖ, ЖЖ
+      const GEN_ORDER = ['male', 'female', 'mixed', 'any', 'mm', 'mf', 'ff', 'team'];
+      const genders = GEN_ORDER.filter(g => divs.some(d => divGender(d) === g));
       const row = (items, cur, attr) => items.length < 2 ? '' : `
         <div class="filt" data-axis="${attr}">
           ${items.map(([v, label]) =>
@@ -1602,8 +1610,8 @@
           if (!divsMatching(ev).length) {
             const d = axis === 'level'
               ? divs.find(x => divLevel(x) === v)
-              : divs.find(x => x.gender_rule === v);
-            if (d) { evLevel = divLevel(d); evGender = d.gender_rule; }
+              : divs.find(x => divGender(x) === v);
+            if (d) { evLevel = divLevel(d); evGender = divGender(d); }
           }
           renderEvent(ev);
         }));
