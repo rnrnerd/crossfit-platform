@@ -1353,6 +1353,8 @@
         ${shown.map(e => `
           <tr>
             <td><b>${esc(e.team_name || e.members[0] || '—')}</b>${
+              e.team_size > 1 ? ` <span class="tag${e.members.length < e.team_size ? ' late' : ''}">${
+                e.members.length} из ${e.team_size}</span>` : ''}${
               e.team_name || e.members.length > 1
                 ? `<div class="muted">${esc(e.members.join(', '))}</div>` : ''}</td>
             <td>${esc(e.division)}</td>

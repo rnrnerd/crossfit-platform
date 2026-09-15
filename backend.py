@@ -305,6 +305,19 @@ CREATE TABLE IF NOT EXISTS entry_members (
     is_captain BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (entry_id, user_id)
 );
+-- Приглашение в команду. Капитан зовёт человека, тот сам соглашается:
+-- без согласия никого в платную заявку не вписываем.
+CREATE TABLE IF NOT EXISTS team_invites (
+    id          SERIAL PRIMARY KEY,
+    entry_id    INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invited_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',   -- pending|accepted|declined|cancelled
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    answered_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS team_invites_pending
+    ON team_invites (entry_id, user_id) WHERE status = 'pending';
 
 -- Комплексы
 CREATE TABLE IF NOT EXISTS wods (
@@ -506,6 +519,7 @@ async def h_me(r):
         # Отдельно от списка выше: тот показывает только предстоящее, а вход
         # в админку нужен и после старта — поправить результат, доотметить
         # оплату, выгрузить протокол.
+        invites = await _my_invites(c, u["id"])
         is_organizer = bool(await c.fetchval(
             """SELECT 1 FROM event_staff
                WHERE user_id=$1 AND role='organizer' LIMIT 1""", u["id"]))
@@ -522,6 +536,7 @@ async def h_me(r):
             "has_mark": bool(x["mark_v"]),
         } for x in my_entries],
         "is_organizer": is_organizer,
+        "invites": invites,
         "staff_of": [dict(x) | {
             "date_start": str(x["date_start"] or ""),
             "date_end": str(x["date_end"] or ""),
@@ -1199,11 +1214,74 @@ async def h_news_image(r):
     return resp
 
 
+def _reg_open(ev):
+    """Регистрация идёт: статус и срок. До этого момента меняется и состав команды."""
+    return ev["status"] == "registration" and not (
+        ev["reg_closes_at"] and ev["reg_closes_at"] < date.today())
+
+
+def _gender_fits(division, user):
+    """Подходит ли человек в категорию по полу. Пустой пол не отсекаем здесь:
+    без пола профиль неполон, и это отдельная ошибка."""
+    if division["gender_rule"] in ("male", "female") and user["gender"]:
+        return user["gender"] == ("М" if division["gender_rule"] == "male" else "Ж")
+    return True
+
+
+def _avatar(uid, photo_v):
+    return f"/api/photo/{uid}?v={photo_v}" if photo_v else ""
+
+
+async def _team_view(c, entry_id, me_id):
+    """Состав команды и ждущие ответа приглашения — для экрана события."""
+    members = await c.fetch(
+        """SELECT u.id, u.name, u.photo_v, m.is_captain FROM entry_members m
+           JOIN users u ON u.id = m.user_id
+           WHERE m.entry_id=$1 ORDER BY m.is_captain DESC, u.name""", entry_id)
+    invites = await c.fetch(
+        """SELECT i.id, u.name, u.username FROM team_invites i
+           JOIN users u ON u.id = i.user_id
+           WHERE i.entry_id=$1 AND i.status='pending' ORDER BY i.id""", entry_id)
+    return {
+        "members": [{"user_id": m["id"], "name": m["name"] or "Без имени",
+                     "is_captain": m["is_captain"], "is_me": m["id"] == me_id,
+                     "avatar": _avatar(m["id"], m["photo_v"])} for m in members],
+        "invites": [{"id": i["id"], "name": i["name"] or "Без имени",
+                     "username": i["username"] or ""} for i in invites],
+    }
+
+
+async def _my_invites(c, user_id, event_id=None):
+    """Приглашения, на которые человек ещё не ответил. Снятая команда или
+    закрытая регистрация приглашение гасят — такие не показываем."""
+    rows = await c.fetch(
+        """SELECT i.id, en.id AS entry_id, en.team_name, e.id AS event_id, e.title,
+                  e.date_start, e.date_end, e.mark_v, d.name AS division, d.team_size,
+                  cap.name AS captain,
+                  (SELECT COUNT(*) FROM entry_members x WHERE x.entry_id = en.id) AS members
+           FROM team_invites i
+           JOIN entries en  ON en.id = i.entry_id AND en.status = 'active'
+           JOIN events e    ON e.id = en.event_id AND e.status = 'registration'
+                           AND (e.reg_closes_at IS NULL OR e.reg_closes_at >= CURRENT_DATE)
+           JOIN divisions d ON d.id = en.division_id
+           LEFT JOIN entry_members cm ON cm.entry_id = en.id AND cm.is_captain
+           LEFT JOIN users cap ON cap.id = cm.user_id
+           WHERE i.user_id = $1 AND i.status = 'pending'
+             AND ($2::int IS NULL OR e.id = $2)
+           ORDER BY i.id DESC""", user_id, event_id)
+    return [{"id": x["id"], "event_id": x["event_id"], "title": x["title"],
+             "team_name": x["team_name"], "division": x["division"],
+             "captain": x["captain"] or "Капитан", "team_size": x["team_size"],
+             "members": x["members"], "has_mark": bool(x["mark_v"]), "mark_v": x["mark_v"],
+             "date_start": str(x["date_start"] or ""), "date_end": str(x["date_end"] or "")}
+            for x in rows]
+
+
 async def _my_entry(c, event_id, user_id):
     """Активная заявка пользователя на событие, если она есть."""
     return await c.fetchrow(
         """SELECT en.id, en.division_id, en.team_name, en.payment_status,
-                  en.pay_due, d.name AS division, d.price
+                  en.pay_due, d.name AS division, d.price, d.team_size, m.is_captain
            FROM entries en
            JOIN entry_members m ON m.entry_id = en.id
            JOIN divisions d ON d.id = en.division_id
@@ -1238,9 +1316,14 @@ async def h_entry_create(r):
             "SELECT * FROM divisions WHERE id=$1 AND event_id=$2", did, eid)
         if not d:
             return _json({"error": "division_not_found"}, status=404)
-        # командные форматы требуют приглашения партнёра — отдельный сценарий
+        # Командную заявку подаёт капитан: название сейчас, состав — приглашениями.
+        # Неполная команда сразу держит место: собирать состав можно до закрытия
+        # регистрации, а место за это время не должно уйти.
+        team_name = ""
         if d["team_size"] > 1:
-            return _json({"error": "team_division"}, status=409)
+            team_name = _clean(body.get("team_name"), 40)
+            if len(team_name) < 2:
+                return _json({"error": "team_name_required"}, status=400)
         if d["gender_rule"] in ("male", "female"):
             want = "М" if d["gender_rule"] == "male" else "Ж"
             if u["gender"] != want:
@@ -1264,8 +1347,8 @@ async def h_entry_create(r):
 
         async with c.transaction():
             entry_id = await c.fetchval(
-                """INSERT INTO entries (event_id, division_id, pay_due)
-                   VALUES ($1,$2,$3) RETURNING id""", eid, did, due)
+                """INSERT INTO entries (event_id, division_id, pay_due, team_name)
+                   VALUES ($1,$2,$3,$4) RETURNING id""", eid, did, due, team_name)
             await c.execute(
                 """INSERT INTO entry_members (entry_id, user_id, is_captain)
                    VALUES ($1,$2,TRUE)""", entry_id, u["id"])
@@ -1279,9 +1362,11 @@ async def h_entry_create(r):
             money_line = f"\nУчастие: {d['price']} ₽, оплата у организатора"
             if due:
                 money_line += f"\nОплатите до {fmt_ru_date(due)}, иначе место освободится"
+        team_line = (f"\nКоманда «{esc_html(team_name)}»: пригласите участников "
+                     f"на экране события" if team_name else "")
         await notify(c, u["id"], "entry_created",
                      f"<b>Заявка принята</b>\n{esc_html(ev['title'])}\n"
-                     f"Категория: {esc_html(d['name'])}{money_line}",
+                     f"Категория: {esc_html(d['name'])}{team_line}{money_line}",
                      f"event_{eid}")
 
         # Организаторам — о новой заявке, сводкой не чаще раза в час на старт
@@ -1542,11 +1627,238 @@ async def h_entry_withdraw(r):
         entry = await _my_entry(c, eid, u["id"])
         if not entry:
             return _json({"error": "no_entry"}, status=404)
-        await c.execute(
-            """UPDATE entries SET status='withdrawn', withdraw_reason='self'
-               WHERE id=$1""", entry["id"])
+        title = await c.fetchval("SELECT title FROM events WHERE id=$1", eid)
+        who = esc_html(u["name"] or "Участник")
+        team = esc_html(entry["team_name"])
+        if entry["team_size"] > 1 and not entry["is_captain"]:
+            # участник выходит сам — заявка команды остаётся, место за ней
+            await c.execute("DELETE FROM entry_members WHERE entry_id=$1 AND user_id=$2",
+                            entry["id"], u["id"])
+            captain = await c.fetchval(
+                "SELECT user_id FROM entry_members WHERE entry_id=$1 AND is_captain", entry["id"])
+            await notify(c, captain, "team_left",
+                         f"<b>{who} вышел из команды</b>\n{esc_html(title)}\n"
+                         f"Команда «{team}» — пригласите замену на экране события",
+                         f"event_{eid}")
+            logger.info("Атлет %s вышел из команды %s", u["id"], entry["id"])
+            return _json({"ok": True, "left": True})
+        others = [x["user_id"] for x in await c.fetch(
+            "SELECT user_id FROM entry_members WHERE entry_id=$1 AND user_id<>$2",
+            entry["id"], u["id"])]
+        async with c.transaction():
+            await c.execute(
+                """UPDATE entries SET status='withdrawn', withdraw_reason='self'
+                   WHERE id=$1""", entry["id"])
+            await c.execute(
+                """UPDATE team_invites SET status='cancelled', answered_at=NOW()
+                   WHERE entry_id=$1 AND status='pending'""", entry["id"])
+        for uid in others:
+            await notify(c, uid, "team_withdrawn",
+                         f"<b>Заявка команды снята</b>\n{esc_html(title)}\n"
+                         f"Капитан снял команду «{team}» со старта", f"event_{eid}")
         logger.info("Заявка %s снята атлетом %s", entry["id"], u["id"])
     return _json({"ok": True})
+
+
+async def _captain_entry(c, r, u):
+    """Событие и командная заявка, где пользователь капитан, при открытой
+    регистрации. Возвращает (событие, заявка, ошибка-ответ)."""
+    try:
+        eid = int(r.match_info["id"])
+    except ValueError:
+        return None, None, _json({"error": "bad_request"}, status=400)
+    ev = await c.fetchrow("SELECT * FROM events WHERE id=$1", eid)
+    if not ev:
+        return None, None, _json({"error": "not_found"}, status=404)
+    if not _reg_open(ev):
+        return None, None, _json({"error": "registration_closed"}, status=409)
+    entry = await _my_entry(c, eid, u["id"])
+    if not entry:
+        return None, None, _json({"error": "no_entry"}, status=404)
+    if entry["team_size"] <= 1 or not entry["is_captain"]:
+        return None, None, _json({"error": "not_captain"}, status=403)
+    return ev, entry, None
+
+
+async def h_team_invite(r):
+    """Капитан зовёт человека в команду по @username или tg_id.
+
+    Искать только точным совпадением: перебирать базу по именам капитану
+    незачем, а партнёр свой username и так знает. Найти можно лишь того, кто
+    уже открывал приложение, — иначе строки в users нет.
+    """
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    try:
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    who = _clean(body.get("who"), 64).lstrip("@").strip()
+    if len(who) < 2:
+        return _json({"error": "invite_who"}, status=400)
+    async with db_pool.acquire() as c:
+        ev, entry, deny = await _captain_entry(c, r, u)
+        if deny is not None:
+            return deny
+        target = await c.fetchrow(
+            """SELECT * FROM users
+               WHERE (username <> '' AND LOWER(username) = LOWER($1))
+                  OR ($2::BIGINT IS NOT NULL AND tg_id = $2::BIGINT)
+               LIMIT 1""", who, int(who) if who.isdigit() else None)
+        if not target:
+            return _json({"error": "user_not_found"}, status=404)
+        if target["id"] == u["id"]:
+            return _json({"error": "invite_self"}, status=409)
+        d = await c.fetchrow("SELECT * FROM divisions WHERE id=$1", entry["division_id"])
+        if not _gender_fits(d, target):
+            return _json({"error": "gender_mismatch_member"}, status=409)
+        if await _my_entry(c, ev["id"], target["id"]):
+            return _json({"error": "invitee_registered"}, status=409)
+        async with c.transaction():
+            # блокируем заявку: два одновременных приглашения не должны
+            # вдвоём занять последнее место в составе
+            await c.execute("SELECT id FROM entries WHERE id=$1 FOR UPDATE", entry["id"])
+            taken = await c.fetchval(
+                """SELECT (SELECT COUNT(*) FROM entry_members WHERE entry_id=$1)
+                        + (SELECT COUNT(*) FROM team_invites
+                           WHERE entry_id=$1 AND status='pending')""", entry["id"])
+            if taken >= d["team_size"]:
+                return _json({"error": "team_full"}, status=409)
+            invite_id = await c.fetchval(
+                """INSERT INTO team_invites (entry_id, user_id, invited_by)
+                   VALUES ($1,$2,$3)
+                   ON CONFLICT (entry_id, user_id) WHERE status='pending' DO NOTHING
+                   RETURNING id""", entry["id"], target["id"], u["id"])
+        if not invite_id:
+            return _json({"error": "already_invited"}, status=409)
+        await notify(c, target["id"], "team_invite",
+                     f"<b>Приглашение в команду</b>\n{esc_html(ev['title'])}\n"
+                     f"{esc_html(u['name'] or 'Капитан')} зовёт вас в команду "
+                     f"«{esc_html(entry['team_name'])}» — {esc_html(entry['division'])}\n"
+                     f"Принять или отклонить можно на экране события",
+                     f"event_{ev['id']}", dedup=f"invite:{invite_id}")
+        logger.info("Приглашение %s: заявка %s, атлет %s", invite_id, entry["id"], target["id"])
+    return _json({"ok": True, "invite_id": invite_id, "name": target["name"] or "Без имени"})
+
+
+async def h_team_invite_cancel(r):
+    """Капитан отзывает приглашение, на которое ещё не ответили."""
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    try:
+        invite_id = int(r.match_info["invite_id"])
+    except ValueError:
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        ev, entry, deny = await _captain_entry(c, r, u)
+        if deny is not None:
+            return deny
+        done = await c.fetchval(
+            """UPDATE team_invites SET status='cancelled', answered_at=NOW()
+               WHERE id=$1 AND entry_id=$2 AND status='pending' RETURNING id""",
+            invite_id, entry["id"])
+    if not done:
+        return _json({"error": "invite_not_found"}, status=404)
+    return _json({"ok": True})
+
+
+async def h_team_member_remove(r):
+    """Капитан убирает участника из состава. Себя капитан так не убирает:
+    для этого есть снятие заявки команды."""
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    try:
+        uid = int(r.match_info["user_id"])
+    except ValueError:
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        ev, entry, deny = await _captain_entry(c, r, u)
+        if deny is not None:
+            return deny
+        if uid == u["id"]:
+            return _json({"error": "not_captain"}, status=409)
+        done = await c.fetchval(
+            """DELETE FROM entry_members WHERE entry_id=$1 AND user_id=$2 AND NOT is_captain
+               RETURNING user_id""", entry["id"], uid)
+        if not done:
+            return _json({"error": "member_not_found"}, status=404)
+        await notify(c, uid, "team_removed",
+                     f"<b>Вас убрали из команды</b>\n{esc_html(ev['title'])}\n"
+                     f"Команда «{esc_html(entry['team_name'])}»", f"event_{ev['id']}")
+    return _json({"ok": True})
+
+
+async def h_invite_answer(r):
+    """Приглашённый принимает или отклоняет приглашение."""
+    u = await current_user(r)
+    if not u:
+        return _need_auth()
+    action = r.match_info["action"]
+    try:
+        invite_id = int(r.match_info["invite_id"])
+    except ValueError:
+        return _json({"error": "bad_request"}, status=400)
+    if action not in ("accept", "decline"):
+        return _json({"error": "bad_request"}, status=400)
+    async with db_pool.acquire() as c:
+        inv = await c.fetchrow(
+            """SELECT i.id, i.entry_id, en.status AS entry_status, en.team_name,
+                      en.event_id, d.team_size, d.gender_rule, d.name AS division
+               FROM team_invites i
+               JOIN entries en  ON en.id = i.entry_id
+               JOIN divisions d ON d.id = en.division_id
+               WHERE i.id=$1 AND i.user_id=$2 AND i.status='pending'""", invite_id, u["id"])
+        if not inv or inv["entry_status"] != "active":
+            return _json({"error": "invite_not_found"}, status=404)
+        ev = await c.fetchrow("SELECT * FROM events WHERE id=$1", inv["event_id"])
+        captain = await c.fetchval(
+            "SELECT user_id FROM entry_members WHERE entry_id=$1 AND is_captain", inv["entry_id"])
+        who = esc_html(u["name"] or "Участник")
+        team = esc_html(inv["team_name"])
+        if action == "decline":
+            await c.execute(
+                "UPDATE team_invites SET status='declined', answered_at=NOW() WHERE id=$1",
+                invite_id)
+            await notify(c, captain, "team_declined",
+                         f"<b>{who} отклонил приглашение</b>\n{esc_html(ev['title'])}\n"
+                         f"Команда «{team}»", f"event_{ev['id']}")
+            return _json({"ok": True})
+        if not _reg_open(ev):
+            return _json({"error": "registration_closed"}, status=409)
+        if not (u["name"] and u["gender"]):
+            return _json({"error": "profile_incomplete"}, status=409)
+        if not _gender_fits(inv, u):
+            return _json({"error": "gender_mismatch"}, status=409)
+        if await _my_entry(c, ev["id"], u["id"]):
+            return _json({"error": "already_registered"}, status=409)
+        async with c.transaction():
+            await c.execute("SELECT id FROM entries WHERE id=$1 FOR UPDATE", inv["entry_id"])
+            members = await c.fetchval(
+                "SELECT COUNT(*) FROM entry_members WHERE entry_id=$1", inv["entry_id"])
+            if members >= inv["team_size"]:
+                return _json({"error": "team_full"}, status=409)
+            await c.execute(
+                """INSERT INTO entry_members (entry_id, user_id, is_captain)
+                   VALUES ($1,$2,FALSE)""", inv["entry_id"], u["id"])
+            await c.execute(
+                "UPDATE team_invites SET status='accepted', answered_at=NOW() WHERE id=$1",
+                invite_id)
+            # в одну команду на старт: остальные приглашения на это событие гаснут
+            await c.execute(
+                """UPDATE team_invites i SET status='cancelled', answered_at=NOW()
+                   FROM entries en
+                   WHERE en.id = i.entry_id AND en.event_id=$1
+                     AND i.user_id=$2 AND i.status='pending'""", ev["id"], u["id"])
+        full = members + 1 >= inv["team_size"]
+        await notify(c, captain, "team_joined",
+                     f"<b>{who} в команде</b>\n{esc_html(ev['title'])}\n"
+                     f"Команда «{team}»: {members + 1} из {inv['team_size']}"
+                     f"{' — состав собран' if full else ''}", f"event_{ev['id']}")
+        logger.info("Атлет %s принял приглашение %s", u["id"], invite_id)
+    return _json({"ok": True, "full": full})
 
 
 # ── Внешний соревновательный модуль ──────────────────────────────────
@@ -2191,6 +2503,9 @@ async def h_event(r):
         # кнопку подачи или карточку «вы заявлены»
         me = await current_user(r)
         mine = await _my_entry(c, eid, me["id"]) if me else None
+        team = await _team_view(c, mine["id"], me["id"]) \
+            if mine and mine["team_size"] > 1 else None
+        invites = await _my_invites(c, me["id"], eid) if me and not mine else []
 
     # Запрос к модулю — уже вне пула: сетевой вызов не должен держать
     # соединение к базе, иначе лежащий модуль выест пул на живом старте.
@@ -2215,7 +2530,10 @@ async def h_event(r):
         "has_mark": bool(ev["mark_v"]), "mark_v": ev["mark_v"],
         "athletes": athletes, "entries": entries,
         "status": ev["status"],
-        "my_entry": (dict(mine) | {"pay_due": str(mine["pay_due"] or "")}) if mine else None,
+        "my_entry": (dict(mine) | {"pay_due": str(mine["pay_due"] or "")}
+                     | ({"team": team} if team else {})) if mine else None,
+        "my_invites": invites,
+        "reg_open": _reg_open(ev),
         "pay_info": ev["pay_info"], "pay_url": ev["pay_url"],
         "has": {k: int(v) for k, v in counts.items()},
         "feed": bool(ev["feed_url"]), "feed_down": feed_down,
@@ -2584,7 +2902,7 @@ async def a_entries(r):
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT en.id, en.status, en.team_name, en.created_at, d.name AS division,
-                      en.payment_status, en.pay_due, en.withdraw_reason, d.price,
+                      en.payment_status, en.pay_due, en.withdraw_reason, d.price, d.team_size,
                       ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
                       ARRAY_AGG(COALESCE(NULLIF(u.city,''),'—') ORDER BY m.is_captain DESC, u.name) AS cities
                FROM entries en
@@ -2593,12 +2911,13 @@ async def a_entries(r):
                JOIN users u ON u.id = m.user_id
                WHERE en.event_id=$1
                GROUP BY en.id, en.status, en.team_name, en.created_at, d.name, d.ord,
-                        en.payment_status, en.pay_due, en.withdraw_reason, d.price
+                        en.payment_status, en.pay_due, en.withdraw_reason, d.price, d.team_size
                ORDER BY d.ord, en.id""", eid)
     return _json([{
         "id": x["id"], "status": x["status"], "team_name": x["team_name"],
         "payment_status": x["payment_status"], "pay_due": str(x["pay_due"] or ""),
         "withdraw_reason": x["withdraw_reason"], "price": x["price"],
+        "team_size": x["team_size"],
         "division": x["division"], "members": list(x["members"] or []),
         "cities": list(x["cities"] or []),
         "created_at": x["created_at"].isoformat() if x["created_at"] else "",
@@ -3412,6 +3731,10 @@ def build_web_app():
     app.router.add_get("/api/news-image/{id}", h_news_image)
     app.router.add_post("/api/events/{id}/entry", h_entry_create)
     app.router.add_delete("/api/events/{id}/entry", h_entry_withdraw)
+    app.router.add_post("/api/events/{id}/team/invites", h_team_invite)
+    app.router.add_delete("/api/events/{id}/team/invites/{invite_id}", h_team_invite_cancel)
+    app.router.add_delete("/api/events/{id}/team/members/{user_id}", h_team_member_remove)
+    app.router.add_post("/api/invites/{invite_id}/{action}", h_invite_answer)
     app.router.add_get("/api/events/{id}/leaderboard", h_leaderboard)
     app.router.add_get("/api/events/{id}/wods", h_event_wods)
     app.router.add_get("/api/events/{id}/schedule", h_event_schedule)

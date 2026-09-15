@@ -572,6 +572,41 @@
       font-size:15px; margin-bottom:5px; }
     .notice button { margin-top:12px; }
 
+    /* ── Команда ──
+       Состав — внутри карточки заявки: это и есть заявка, а не отдельный раздел.
+       Ждущие ответа приглашения стоят в том же списке тоном ниже: капитан видит,
+       сколько мест реально занято и кого ещё ждут. */
+    .team { margin-top:14px; padding-top:14px; box-shadow:inset 0 1px 0 var(--hair); }
+    .team-h { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+    .team-h b { font-size:17px; font-weight:700; letter-spacing:-.02em; }
+    .team-h span { flex:none; font-size:13px; color:var(--steel); }
+    .team-h span.full { color:var(--accent); }
+    .team-m { display:flex; align-items:center; gap:10px; margin-top:10px; min-height:36px; }
+    .team-m .ava-s { width:32px; height:32px; border-radius:50%; flex:none; overflow:hidden;
+      background:rgba(255,255,255,.07); display:grid; place-items:center;
+      font-size:11px; font-weight:700; color:var(--steel); font-style:normal; }
+    .team-m .ava-s img { width:100%; height:100%; object-fit:cover; }
+    .team-m > span { flex:1; min-width:0; font-size:15px; }
+    .team-m small { font-size:12px; color:var(--steel); margin-left:6px; }
+    .team-m.wait > span { color:var(--steel); }
+    .team-m.slot .ava-s { background:none; box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.14); }
+    .team-m.slot > span { color:var(--steel); font-size:14px; }
+    .team-m button { flex:none; background:none; border:none; cursor:pointer; min-height:36px;
+      font-size:13px; color:var(--steel); text-decoration:underline; text-underline-offset:3px; }
+    .team-inv { display:flex; gap:8px; margin-top:14px; }
+    .team-inv input { flex:1; min-width:0; height:46px; border:none; border-radius:12px;
+      background:rgba(255,255,255,.06); color:var(--chalk); font:inherit; font-size:16px; padding:0 14px; }
+    .team-inv input:focus { outline:none; box-shadow:inset 0 0 0 1px var(--steel); }
+    .team-inv .btn { width:auto; min-height:46px; padding:0 16px; font-size:14px; }
+    .team-note { font-size:12px; color:var(--steel); margin-top:8px; line-height:1.45; }
+    .team-err { font-size:13px; color:var(--live); margin-top:8px; }
+    .invite-card { margin:0; }
+    .invite-card .inv-act { display:flex; gap:8px; margin-top:12px; }
+    .invite-card .inv-act .btn { margin-top:0; }
+    .invite-card .inv-act .btn.text { width:auto; padding:0 16px; }
+    .fact-act .invite-card + .pad, .fact-act .invite-card + .invite-card { margin-top:14px; }
+    #my-list .invite-card { margin:0 var(--pad) 10px; }
+
     /* ── Шторка ── */
     /* страница и шторка почти одного тона, поэтому затемнение сильное,
        а сама шторка стоит на поднятой поверхности */
@@ -984,7 +1019,17 @@
       profile_incomplete:   'Сначала заполните имя и пол в профиле.',
       registration_closed:  'Регистрация на этот старт уже закрыта.',
       division_not_found:   'Эта категория больше недоступна. Обновите экран.',
-      team_division:        'В командную категорию заявку подаёт капитан — пока только через организатора.',
+      team_name_required:   'Придумайте название команды — от двух символов.',
+      invite_who:           'Введите @username или tg_id участника.',
+      user_not_found:       'Такой человек ещё не открывал приложение. Попросите его зайти в бота и повторите.',
+      invite_self:          'Вы уже в команде — вы капитан.',
+      invitee_registered:   'Этот человек уже заявлен на старт.',
+      team_full:            'Состав команды уже полный.',
+      already_invited:      'Приглашение этому человеку уже отправлено.',
+      not_captain:          'Менять состав может только капитан.',
+      gender_mismatch_member: 'Категория не подходит этому участнику по полу.',
+      invite_not_found:     'Приглашение больше не действует.',
+      member_not_found:     'Этого участника уже нет в составе.',
       gender_mismatch:      'Эта категория для другого пола.',
       already_registered:   'Вы уже заявлены на этот старт.',
       division_full:        'В категории не осталось мест.',
@@ -2138,24 +2183,96 @@
               ${ev.pay_info ? `<div class="pay-how">${esc(ev.pay_info)}</div>` : ''}
               ${ev.pay_url ? '<button class="btn" id="ev-pay">Перейти к оплате</button>' : ''}
             </div>`}
-          ${ev.status === 'registration'
-            ? '<div class="entry-act"><button id="ev-withdraw">Снять заявку</button></div>'
+          ${e.team ? teamHTML(ev, e) : ''}
+          ${ev.reg_open
+            ? `<div class="entry-act"><button id="ev-withdraw">${
+                e.team_size > 1 ? (e.is_captain ? 'Снять заявку команды' : 'Выйти из команды')
+                                : 'Снять заявку'}</button></div>`
             : ''}
         </div>`;
       }
-      if (ev.status !== 'registration') return '';
+      const invites = (ev.my_invites || []).map(inviteHTML).join('');
+      if (ev.status !== 'registration') return invites;
       if (isAnnounced(ev)) return `
         <div class="notice">
           <b>Регистрация ещё не открыта</b>
           Приём заявок начнётся ${esc(fmtDay(ev.reg_opens_at))}.
         </div>`;
-      if (!ev.profile_complete) return `
+      if (!ev.profile_complete) return invites + `
         <div class="notice">
           <b>Профиль не заполнен</b>
           Для регистрации необходимо заполнить все данные профиля.
           <button class="btn" id="ev-to-profile">Заполнить профиль</button>
         </div>`;
-      return `<div class="pad"><button class="btn" id="ev-register">Подать заявку</button></div>`;
+      return invites + `<div class="pad"><button class="btn" id="ev-register">Подать заявку</button></div>`;
+    }
+
+    // Состав команды в карточке заявки. Пустые места рисуем пунктиром:
+    // «2 из 3» цифрой читается хуже, чем одно незанятое место в списке.
+    function teamHTML(ev, e) {
+      const t = e.team;
+      const edit = e.is_captain && ev.reg_open;
+      const taken = t.members.length + t.invites.length;
+      const slots = Math.max(0, e.team_size - taken);
+      const ava = m => `<i class="ava-s">${m.avatar ? `<img src="${esc(m.avatar)}" alt="">` : esc(initials(m.name))}</i>`;
+      return `
+        <div class="team">
+          <div class="team-h"><b>«${esc(e.team_name)}»</b><span class="${
+            t.members.length >= e.team_size ? 'full' : ''}">${t.members.length} из ${e.team_size}</span></div>
+          ${t.members.map(m => `
+            <div class="team-m">${ava(m)}<span>${esc(m.name)}${
+              m.is_captain ? '<small>капитан</small>' : ''}${m.is_me ? '<small>вы</small>' : ''}</span>${
+              edit && !m.is_captain ? `<button data-rm="${m.user_id}" data-name="${esc(m.name)}">Убрать</button>` : ''}</div>`).join('')}
+          ${t.invites.map(i => `
+            <div class="team-m wait">${ava(i)}<span>${esc(i.username ? '@' + i.username : i.name)}<small>ждёт ответа</small></span>${
+              edit ? `<button data-cancel="${i.id}">Отозвать</button>` : ''}</div>`).join('')}
+          ${Array.from({length: slots}, () => `
+            <div class="team-m slot"><i class="ava-s"></i><span>Свободное место</span></div>`).join('')}
+          ${edit && slots ? `
+            <div class="team-inv">
+              <input id="team-who" placeholder="@username или tg_id" autocomplete="off"
+                     autocapitalize="off" spellcheck="false" enterkeyhint="send">
+              <button class="btn" id="team-invite">Пригласить</button>
+            </div>
+            <div class="team-err" id="team-err" hidden></div>
+            <div class="team-note">Найти можно того, кто уже открывал приложение.
+              Приглашённый получит сообщение в боте и подтвердит участие сам.</div>` : ''}
+          ${!e.is_captain && ev.reg_open ? '<div class="team-note">Состав меняет капитан — до закрытия регистрации.</div>' : ''}
+        </div>`;
+    }
+
+    // Приглашение в чужую команду: на экране события и в «Моих»
+    function inviteHTML(i) {
+      return `
+        <div class="notice invite-card">
+          <b>Приглашение в команду «${esc(i.team_name)}»</b>
+          ${esc(i.captain)} зовёт вас в категорию ${esc(i.division)}.
+          Сейчас в составе ${i.members} из ${i.team_size}.
+          <div class="inv-act">
+            <button class="btn" data-accept="${i.id}">Принять</button>
+            <button class="btn text" data-decline="${i.id}">Отклонить</button>
+          </div>
+        </div>`;
+    }
+
+    // Ответ на приглашение и правки состава — общая обвязка: после любого
+    // действия перечитываем профиль (там список приглашений) и экран.
+    function wireTeam(root, after) {
+      const act = async (btn, path, method, body, ok) => {
+        btn.disabled = true;
+        const res = await send(path, method, body);
+        btn.disabled = false;
+        if (res.error) { toast(reason(res.error)); return null; }
+        if (ok) toast(ok);
+        await refreshMe();
+        after();
+        return res;
+      };
+      root.querySelectorAll('[data-accept]').forEach(b => b.onclick = () =>
+        act(b, `/api/invites/${b.dataset.accept}/accept`, 'POST', {}, 'Вы в команде'));
+      root.querySelectorAll('[data-decline]').forEach(b => b.onclick = () =>
+        act(b, `/api/invites/${b.dataset.decline}/decline`, 'POST', {}, 'Приглашение отклонено'));
+      return act;
     }
 
     function wireActions(ev) {
@@ -2166,11 +2283,34 @@
       if (reg) reg.onclick = () => pickDivision(ev, reg);
       if (wd)  wd.onclick  = () => confirmWithdraw(ev, wd);
       if (pr)  pr.onclick  = () => show('profile');
+      const act = wireTeam($('event-body'), () => reloadEvent(ev.id));
+      $('event-body').querySelectorAll('[data-cancel]').forEach(b => b.onclick = () =>
+        act(b, `/api/events/${ev.id}/team/invites/${b.dataset.cancel}`, 'DELETE', undefined, 'Приглашение отозвано'));
+      $('event-body').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+        if (!confirm(`Убрать ${b.dataset.name} из команды?`)) return;
+        act(b, `/api/events/${ev.id}/team/members/${b.dataset.rm}`, 'DELETE', undefined, 'Участник убран');
+      });
+      const inv = $('team-invite'), who = $('team-who');
+      if (inv) {
+        const go = async () => {
+          const v = who.value.trim();
+          const err = $('team-err');
+          err.hidden = true;
+          if (v.replace(/^@/, '').length < 2) { err.textContent = reason('invite_who'); err.hidden = false; return; }
+          inv.disabled = true; inv.textContent = 'Отправляем…';
+          const res = await send(`/api/events/${ev.id}/team/invites`, 'POST', {who: v});
+          inv.disabled = false; inv.textContent = 'Пригласить';
+          if (res.error) { err.textContent = reason(res.error); err.hidden = false; return; }
+          toast(`Приглашение отправлено: ${res.name}`);
+          reloadEvent(ev.id);
+        };
+        inv.onclick = go;
+        who.onkeydown = e => { if (e.key === 'Enter') go(); };
+      }
     }
 
     // Почему в категорию нельзя — говорим до нажатия, а не после
     function blockedReason(ev, d) {
-      if (d.team_size > 1) return 'Командный';
       if (d.gender_rule === 'male'   && me?.user?.gender !== 'М') return 'Только мужчины';
       if (d.gender_rule === 'female' && me?.user?.gender !== 'Ж') return 'Только женщины';
       if (d.max_entries && d.entries >= d.max_entries) return 'Мест нет';
@@ -2185,7 +2325,7 @@
           + `, ${money(d.price)}${d.team_size > 1 && d.price ? ' за команду' : ''}`;
         return `
         <button class="opt" role="radio" aria-checked="false" data-id="${d.id}"
-                data-price="${d.price}" ${why ? 'disabled' : ''}>
+                data-team="${d.team_size}" data-price="${d.price}" ${why ? 'disabled' : ''}>
           <div>
             <div class="opt-name">${paintLevel(d.name, d.level)}</div>
             <div class="opt-sub">${esc(sub)}</div>
@@ -2198,6 +2338,12 @@
         <h3>Выбор категории</h3>
         <p>${esc(ev.title)}</p>
         <div role="radiogroup" aria-label="Категория">${rows}</div>
+        <div class="field" id="sh-team" hidden style="padding-top:16px">
+          <label for="sh-team-name">Название команды</label>
+          <input id="sh-team-name" maxlength="40" autocomplete="off" placeholder="Например, Южный ветер">
+          <div class="team-note">Вы станете капитаном. Участников пригласите
+            по @username на экране события — до закрытия регистрации.</div>
+        </div>
         <div class="sheet-foot">
           <button class="btn" id="sh-go" disabled>Выберите категорию</button>
           <div class="sheet-note">Оплата у организатора — реквизиты и срок
@@ -2206,41 +2352,61 @@
         </div>`, trigger);
 
       const go = $('sh-go');
+      const teamBox = $('sh-team'), teamName = $('sh-team-name');
+      let isTeam = false;
+      // у командной категории кнопка оживает, только когда есть название
+      const syncGo = () => {
+        if (!chosen) return;
+        const ok = !isTeam || teamName.value.trim().length >= 2;
+        go.disabled = !ok;
+        go.textContent = isTeam ? (ok ? 'Создать команду' : 'Назовите команду') : 'Подать заявку';
+      };
+      teamName.oninput = syncGo;
       $('sh-cancel').onclick = closeSheet;
       $('sheet').querySelectorAll('.opt:not([disabled])').forEach(b => b.onclick = () => {
         $('sheet').querySelectorAll('.opt').forEach(x => x.setAttribute('aria-checked', 'false'));
         b.setAttribute('aria-checked', 'true');
         chosen = b.dataset.id;
+        isTeam = Number(b.dataset.team) > 1;
+        teamBox.hidden = !isTeam;
+        if (isTeam) teamName.focus();
         // Цену не выносим на кнопку: платформа денег не принимает, и
         // «Подать заявку · 3 500 ₽» читалось бы как оплата. Сумма стоит
         // в строке категории, а куда платить — скажем после подачи.
-        go.textContent = 'Подать заявку';
-        go.disabled = false;
+        syncGo();
       });
 
       go.onclick = async () => {
         if (!chosen) return;
         go.disabled = true; go.textContent = 'Отправляем…';
-        const res = await send(`/api/events/${ev.id}/entry`, 'POST', {division_id: Number(chosen)});
+        const res = await send(`/api/events/${ev.id}/entry`, 'POST', {
+          division_id: Number(chosen), team_name: isTeam ? teamName.value.trim() : ''});
         if (res.error) {
-          go.disabled = false; go.textContent = 'Подать заявку';
+          go.disabled = false; syncGo();
           $('sheet').querySelector('p').innerHTML = `<span class="err">${esc(reason(res.error))}</span>`;
           return;
         }
         closeSheet();
-        toast('Заявка подана');
+        toast(isTeam ? 'Команда создана — пригласите участников' : 'Заявка подана');
         await refreshMe();
         reloadEvent(ev.id);
       };
     }
 
     function confirmWithdraw(ev, trigger) {
+      const e = ev.my_entry;
+      const team = e.team_size > 1;
+      const leave = team && !e.is_captain;
+      const [title, text, yes] = leave
+        ? ['Выйти из команды?', `«${e.team_name}» останется заявленной, капитан сможет позвать замену.`, 'Выйти из команды']
+        : team
+          ? ['Снять заявку команды?', `${ev.title}, ${e.division}. Команда «${e.team_name}» выпадет со старта вместе со всем составом.`, 'Снять заявку команды']
+          : ['Снять заявку?', `${ev.title}, ${e.division}. Место освободится для других, подать заявку снова можно, пока идёт регистрация.`, 'Снять заявку'];
       openSheet(`
-        <h3>Снять заявку?</h3>
-        <p>${esc(ev.title)}, ${esc(ev.my_entry.division)}. Место освободится для других,
-           подать заявку снова можно, пока идёт регистрация.</p>
+        <h3>${esc(title)}</h3>
+        <p>${esc(text)}</p>
         <div class="sheet-foot">
-          <button class="btn text" id="sh-yes">Снять заявку</button>
+          <button class="btn text" id="sh-yes">${esc(yes)}</button>
           <button class="btn" id="sh-no">Оставить</button>
         </div>`, trigger);
       $('sh-no').onclick = closeSheet;
@@ -2249,12 +2415,12 @@
         b.disabled = true; b.textContent = 'Снимаем…';
         const res = await send(`/api/events/${ev.id}/entry`, 'DELETE');
         if (res.error) {
-          b.disabled = false; b.textContent = 'Снять заявку';
+          b.disabled = false; b.textContent = yes;
           $('sheet').querySelector('p').innerHTML = `<span class="err">${esc(reason(res.error))}</span>`;
           return;
         }
         closeSheet();
-        toast('Заявка снята');
+        toast(leave ? 'Вы вышли из команды' : 'Заявка снята');
         await refreshMe();
         reloadEvent(ev.id);
       };
@@ -2286,7 +2452,8 @@
       // Работа на старте — отдельный список: судья приходит сюда не за своей
       // заявкой, а за своим стартом, и путать одно с другим нельзя.
       const staff = me.staff_of || [];
-      if (!list.length && !staff.length && !me.is_organizer) {
+      const invites = me.invites || [];
+      if (!list.length && !staff.length && !me.is_organizer && !invites.length) {
         box.innerHTML = `<div class="my-empty">
           <b>Вы пока никуда не заявлены</b>
           <p>Выберите старт — заявка появится здесь со сроком оплаты.</p>
@@ -2325,6 +2492,8 @@
         </button>`;
 
       box.innerHTML = `
+        ${invites.length ? `<div class="h sec">Приглашения<span>${invites.length}</span></div>
+          ${invites.map(i => inviteHTML(i).replace('<b>', `<b data-id="${i.event_id}" style="cursor:pointer">`)).join('')}` : ''}
         <div class="h sec">Мои заявки${active.length ? `<span>${active.length}</span>` : ''}</div>
         ${active.length ? `<div class="my-cards">${active.map(entryCardHTML).join('')}</div>`
           : '<div class="note tight">Активных заявок нет. <a href="#" id="my-find">Найти старт</a></div>'}
@@ -2333,6 +2502,7 @@
         <div style="height:40px"></div>`;
       box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
       box.querySelectorAll('[data-ev]').forEach(c => c.onclick = () => openEvent(c.dataset.ev));
+      wireTeam(box, loadMy);
       const find = $('my-find');
       if (find) find.onclick = ev => { ev.preventDefault(); show('search'); };
       const ga = $('go-admin');
