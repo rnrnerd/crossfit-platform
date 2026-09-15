@@ -318,6 +318,11 @@ CREATE TABLE IF NOT EXISTS team_invites (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS team_invites_pending
     ON team_invites (entry_id, user_id) WHERE status = 'pending';
+-- Стартовый номер уникален среди действующих заявок старта: по номеру зовут
+-- на площадке, два одинаковых — это два человека на один вызов. Снятые
+-- заявки номер не держат, иначе освободившийся номер нельзя было бы выдать.
+CREATE UNIQUE INDEX IF NOT EXISTS entries_bib_unique
+    ON entries (event_id, bib) WHERE bib <> '' AND status = 'active';
 
 -- Комплексы
 CREATE TABLE IF NOT EXISTS wods (
@@ -501,7 +506,7 @@ async def h_me(r):
         my_entries = await c.fetch(
             """SELECT e.id, e.title, e.slug, e.date_start, e.date_end, e.status,
                       e.mark_v, e.reg_closes_at, d.name AS division, d.price,
-                      en.id AS entry_id, en.payment_status, en.pay_due
+                      en.id AS entry_id, en.payment_status, en.pay_due, en.bib
                FROM entry_members m
                JOIN entries en ON en.id = m.entry_id
                JOIN events e   ON e.id = en.event_id
@@ -1300,7 +1305,7 @@ async def _my_invites(c, user_id, event_id=None):
 async def _my_entry(c, event_id, user_id):
     """Активная заявка пользователя на событие, если она есть."""
     return await c.fetchrow(
-        """SELECT en.id, en.division_id, en.team_name, en.payment_status,
+        """SELECT en.id, en.division_id, en.team_name, en.payment_status, en.bib,
                   en.pay_due, d.name AS division, d.price, d.team_size, m.is_captain
            FROM entries en
            JOIN entry_members m ON m.entry_id = en.id
@@ -2192,7 +2197,7 @@ async def _division_table(c, event_id, division_id):
            ORDER BY w.ord, w.id""", event_id, division_id)
 
     entries = await c.fetch(
-        """SELECT en.id, en.team_name,
+        """SELECT en.id, en.team_name, en.bib,
                   ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
                   MIN(u.id) FILTER (WHERE u.photo_v > 0) AS photo_user,
                   MIN(u.photo_v) FILTER (WHERE u.photo_v > 0) AS photo_v
@@ -2200,7 +2205,7 @@ async def _division_table(c, event_id, division_id):
            JOIN entry_members m ON m.entry_id = en.id
            JOIN users u ON u.id = m.user_id
            WHERE en.division_id = $1 AND en.status = 'active'
-           GROUP BY en.id, en.team_name""", division_id)
+           GROUP BY en.id, en.team_name, en.bib""", division_id)
     ids = [e["id"] for e in entries]
     if not ids:
         return wods, entries, {}, {}, {}
@@ -2250,6 +2255,7 @@ def _protocol_rows(wods, entries, res, points, places, team_size=1, mine=None):
             "entry_id": eid,
             "is_me": bool(mine and mine == eid),
             "name": e["team_name"] or (members[0] if members else "Без имени"),
+            "bib": e.get("bib") or "",
             "members": members if team_size > 1 else [],
             "avatar": (f"/api/photo/{e['photo_user']}?v={e['photo_v']}"
                        if e["photo_user"] else ""),
@@ -2388,7 +2394,7 @@ async def h_event_heats(r):
                LEFT JOIN wods w ON w.id = h.wod_id
                WHERE h.event_id=$1 ORDER BY h.day, h.start_time, h.number""", eid)
         lanes = await c.fetch(
-            """SELECT he.heat_id, he.lane, en.id AS entry_id, en.team_name,
+            """SELECT he.heat_id, he.lane, en.id AS entry_id, en.team_name, en.bib,
                       d.name AS division,
                       ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
                       MIN(u.id) FILTER (WHERE u.photo_v > 0) AS photo_user,
@@ -2400,7 +2406,7 @@ async def h_event_heats(r):
                JOIN entry_members m ON m.entry_id = en.id
                JOIN users u ON u.id = m.user_id
                WHERE h.event_id = $1
-               GROUP BY he.heat_id, he.lane, en.id, en.team_name, d.name
+               GROUP BY he.heat_id, he.lane, en.id, en.team_name, en.bib, d.name
                ORDER BY he.lane""", eid)
     by_heat = {}
     for l in lanes:
@@ -2409,7 +2415,7 @@ async def h_event_heats(r):
             "lane": l["lane"], "entry_id": l["entry_id"],
             "is_me": l["entry_id"] == my_entry_id,
             "name": l["team_name"] or (members[0] if members else "Без имени"),
-            "members": members, "division": l["division"],
+            "members": members, "division": l["division"], "bib": l["bib"],
             "avatar": f"/api/photo/{l['photo_user']}?v={l['photo_v']}" if l["photo_user"] else "",
         })
     return _json([{
@@ -2930,6 +2936,7 @@ async def a_entries(r):
         rows = await c.fetch(
             """SELECT en.id, en.status, en.team_name, en.created_at, d.name AS division,
                       en.payment_status, en.pay_due, en.withdraw_reason, d.price, d.team_size,
+                      en.bib, d.id AS division_id,
                       ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
                       ARRAY_AGG(COALESCE(NULLIF(u.city,''),'—') ORDER BY m.is_captain DESC, u.name) AS cities
                FROM entries en
@@ -2938,13 +2945,14 @@ async def a_entries(r):
                JOIN users u ON u.id = m.user_id
                WHERE en.event_id=$1
                GROUP BY en.id, en.status, en.team_name, en.created_at, d.name, d.ord,
-                        en.payment_status, en.pay_due, en.withdraw_reason, d.price, d.team_size
+                        en.payment_status, en.pay_due, en.withdraw_reason, d.price, d.team_size,
+                        en.bib, d.id
                ORDER BY d.ord, en.id""", eid)
     return _json([{
         "id": x["id"], "status": x["status"], "team_name": x["team_name"],
         "payment_status": x["payment_status"], "pay_due": str(x["pay_due"] or ""),
         "withdraw_reason": x["withdraw_reason"], "price": x["price"],
-        "team_size": x["team_size"],
+        "team_size": x["team_size"], "bib": x["bib"], "division_id": x["division_id"],
         "division": x["division"], "members": list(x["members"] or []),
         "cities": list(x["cities"] or []),
         "created_at": x["created_at"].isoformat() if x["created_at"] else "",
@@ -3310,7 +3318,7 @@ async def a_heats(r):
         lanes = await c.fetch(
             """SELECT he.heat_id, he.entry_id, he.lane, d.name AS division,
                       ARRAY_AGG(u.name ORDER BY m.is_captain DESC, u.name) AS members,
-                      en.team_name
+                      en.team_name, en.bib
                FROM heat_entries he
                JOIN heats h ON h.id = he.heat_id
                JOIN entries en ON en.id = he.entry_id
@@ -3318,13 +3326,13 @@ async def a_heats(r):
                JOIN entry_members m ON m.entry_id = en.id
                JOIN users u ON u.id = m.user_id
                WHERE h.event_id=$1
-               GROUP BY he.heat_id, he.entry_id, he.lane, d.name, en.team_name
+               GROUP BY he.heat_id, he.entry_id, he.lane, d.name, en.team_name, en.bib
                ORDER BY he.lane""", eid)
     by_heat = {}
     for x in lanes:
         members = list(x["members"] or [])
         by_heat.setdefault(x["heat_id"], []).append({
-            "entry_id": x["entry_id"], "lane": x["lane"],
+            "entry_id": x["entry_id"], "lane": x["lane"], "bib": x["bib"],
             "name": x["team_name"] or (members[0] if members else "Без имени"),
             "division": x["division"],
         })
@@ -3555,6 +3563,11 @@ async def a_entry_status(r):
             """UPDATE entries SET status=$2,
                       withdraw_reason = CASE WHEN $2='active' THEN ''
                                              ELSE 'organizer' END,
+                      bib = CASE WHEN $2='active' AND bib <> '' AND EXISTS (
+                                   SELECT 1 FROM entries o
+                                   WHERE o.event_id = entries.event_id AND o.bib = entries.bib
+                                     AND o.status = 'active' AND o.id <> entries.id)
+                                 THEN '' ELSE bib END,
                       pay_due = CASE WHEN $2='active' AND payment_status='unpaid'
                                      THEN CURRENT_DATE + 3 ELSE pay_due END
                WHERE id=$1 RETURNING id""", enid, st)
@@ -3562,6 +3575,78 @@ async def a_entry_status(r):
         return _json({"error": "not_found"}, status=404)
     logger.info("Админка: заявка %s → %s", enid, st)
     return _json({"ok": True})
+
+
+BIB_RE = re.compile(r"^[0-9A-Za-zА-Яа-яЁё-]{1,6}$")
+
+
+@event_admin("id", "entry")
+async def a_entry_bib(r):
+    """Номер одной заявке. Пустой — снять номер."""
+    try:
+        enid = int(r.match_info["id"])
+        body = await r.json()
+    except Exception:
+        return _json({"error": "bad_request"}, status=400)
+    bib = _clean(body.get("bib"), 12).strip()
+    if bib and not BIB_RE.match(bib):
+        return _json({"error": "bad_bib"}, status=400)
+    async with db_pool.acquire() as c:
+        row = await c.fetchrow("SELECT id, event_id, status FROM entries WHERE id=$1", enid)
+        if not row:
+            return _json({"error": "not_found"}, status=404)
+        if bib and row["status"] == "active" and await c.fetchval(
+                """SELECT 1 FROM entries WHERE event_id=$1 AND bib=$2
+                   AND status='active' AND id<>$3""", row["event_id"], bib, enid):
+            return _json({"error": "bib_taken"}, status=409)
+        try:
+            await c.execute("UPDATE entries SET bib=$2 WHERE id=$1", enid, bib)
+        except asyncpg.UniqueViolationError:
+            return _json({"error": "bib_taken"}, status=409)
+    return _json({"ok": True, "bib": bib})
+
+
+@event_admin("id")
+async def a_bibs_assign(r):
+    """Номера пачкой на категорию: по порядку подачи заявок, начиная с start.
+
+    Занятые на старте номера пропускаем. Без overwrite трогаем только заявки
+    без номера — перераздача не должна молча переписать уже напечатанные.
+    """
+    try:
+        eid = int(r.match_info["id"])
+        body = await r.json()
+        did = int(body.get("division_id"))
+        start = int(body.get("start") or 1)
+    except (Exception, KeyError):
+        return _json({"error": "bad_request"}, status=400)
+    if not 1 <= start <= 99999:
+        return _json({"error": "bad_bib"}, status=400)
+    overwrite = body.get("overwrite") is True
+    async with db_pool.acquire() as c:
+        async with c.transaction():
+            if not await c.fetchval(
+                    "SELECT 1 FROM divisions WHERE id=$1 AND event_id=$2", did, eid):
+                return _json({"error": "not_found"}, status=404)
+            rows = await c.fetch(
+                """SELECT id, bib FROM entries
+                   WHERE division_id=$1 AND status='active' ORDER BY created_at, id FOR UPDATE""", did)
+            targets = [x["id"] for x in rows if overwrite or not x["bib"]]
+            if overwrite and targets:
+                await c.execute("UPDATE entries SET bib='' WHERE id = ANY($1::int[])", targets)
+            taken = {x["bib"] for x in await c.fetch(
+                "SELECT bib FROM entries WHERE event_id=$1 AND status='active' AND bib<>''", eid)}
+            n, given = start, []
+            for enid in targets:
+                while str(n) in taken:
+                    n += 1
+                await c.execute("UPDATE entries SET bib=$2 WHERE id=$1", enid, str(n))
+                taken.add(str(n))
+                given.append(n)
+                n += 1
+    logger.info("Админка: номера на категорию %s — %s шт.", did, len(given))
+    return _json({"ok": True, "assigned": len(given),
+                  "from": given[0] if given else None, "to": given[-1] if given else None})
 
 
 @owner_only
@@ -3798,6 +3883,8 @@ def build_web_app():
     app.router.add_delete("/api/admin/events/{id}/staff/{uid}", a_staff_delete)
     app.router.add_post("/api/admin/entries/{id}", a_entry_status)
     app.router.add_post("/api/admin/entries/{id}/payment", a_entry_payment)
+    app.router.add_post("/api/admin/entries/{id}/bib", a_entry_bib)
+    app.router.add_post("/api/admin/events/{id}/bibs", a_bibs_assign)
     app.router.add_post("/api/admin/divisions", a_division_save)
     app.router.add_put("/api/admin/divisions/{id}", a_division_save)
     app.router.add_delete("/api/admin/divisions/{id}", a_division_delete)

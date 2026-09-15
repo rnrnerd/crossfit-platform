@@ -116,6 +116,16 @@
     .ready .warn-it i { color:var(--live); }
     .ready .val { margin-left:auto; color:var(--steel); font-size:13px; }
     .row-lane { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+    /* стартовый номер правится прямо в строке заявки: сохраняется при уходе с поля */
+    .bib-in { width:70px; min-height:34px; padding:6px 8px; border:1px solid transparent;
+      border-radius:7px; background:var(--plate2); color:var(--chalk); font:inherit;
+      font-variant-numeric:tabular-nums; text-align:center; }
+    .bib-in:focus { outline:none; border-color:var(--accent); }
+    .bib-in.bad { border-color:var(--live); }
+    .bib-in:disabled { opacity:.4; }
+    .bib-bar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 14px;
+      padding:12px 14px; background:var(--plate); border-radius:10px; }
+    .bib-bar input[type=number] { width:90px; }
     .row-lane .ln { width:74px; }
     .row-lane .le { flex:1; max-width:460px; }
 
@@ -1004,7 +1014,7 @@
               start_time: '', location: '', lanes: []};
     const box = $('heats');
     const opts = ents.map(e => `<option value="${e.id}">${
-      esc((e.team_name || e.members[0] || '—') + ' · ' + e.division)}</option>`).join('');
+      esc((e.bib ? '№' + e.bib + ' ' : '') + (e.team_name || e.members[0] || '—') + ' · ' + e.division)}</option>`).join('');
     const laneRow = (lane, entry) => `
       <div class="row-lane">
         <input type="number" class="ln" value="${lane}" min="0" max="99">
@@ -1204,7 +1214,7 @@
         ${g.rows.map(r => `
           <tr data-e="${r.entry_id}">
             <td class="num">${r.place}</td>
-            <td><b>${esc(r.name)}</b></td>
+            <td>${r.bib ? `<span class="muted">${esc(r.bib)}</span> ` : ''}<b>${esc(r.name)}</b></td>
             ${r.wods.map(w => `
               <td class="cell">
                 <input class="val" data-e="${r.entry_id}" data-w="${w.wod_id}"
@@ -1372,8 +1382,20 @@
         ${cats.map(c => `<button class="tag${entryCat === c ? ' on' : ''}" data-cat="${esc(c)}">${
           esc(c)} ${list.filter(x => x.division === c).length}</button>`).join('')}
       </div>
+      ${entryCat !== '*' ? (() => {
+        const nums = list.map(x => parseInt(x.bib, 10)).filter(n => n > 0);
+        const next = nums.length ? Math.max(...nums) + 1 : 1;
+        const inCat = list.filter(x => x.division === entryCat && x.status === 'active');
+        const without = inCat.filter(x => !x.bib).length;
+        return `<div class="bib-bar">
+          <span>Номера для «${esc(entryCat)}»: без номера ${without} из ${inCat.length}. Раздать с</span>
+          <span class="f" style="margin:0"><input id="bib-from" type="number" min="1" value="${next}"></span>
+          <label class="chk"><input type="checkbox" id="bib-over"> заменить уже выданные</label>
+          <button class="btn quiet" id="bib-go" data-div="${inCat[0]?.division_id || ''}">Раздать</button>
+        </div>`;
+      })() : ''}
       <table>
-        <tr><th>Участник</th><th>Категория</th><th>Город</th><th>Подана</th>
+        <tr><th>Участник</th><th>№</th><th>Категория</th><th>Город</th><th>Подана</th>
             <th>Оплата</th><th>Статус</th><th></th></tr>
         ${shown.map(e => `
           <tr>
@@ -1382,6 +1404,8 @@
                 e.members.length} из ${e.team_size}</span>` : ''}${
               e.team_name || e.members.length > 1
                 ? `<div class="muted">${esc(e.members.join(', '))}</div>` : ''}</td>
+            <td><input class="bib-in" data-bib="${e.id}" value="${esc(e.bib || '')}" maxlength="6"
+                       placeholder="—" ${e.status === 'active' ? '' : 'disabled'} aria-label="Стартовый номер"></td>
             <td>${esc(e.division)}</td>
             <td>${esc(e.cities[0] || '—')}</td>
             <td>${esc((e.created_at || '').slice(0, 10))}</td>
@@ -1404,6 +1428,36 @@
       entryCat = b.dataset.cat;
       loadEntries(eid);
     });
+    const BIB_ERR = {bib_taken: 'Этот номер уже у другой заявки', bad_bib: 'Номер — до 6 цифр или букв'};
+    box.querySelectorAll('[data-bib]').forEach(inp => {
+      inp.dataset.was = inp.value;
+      const save = async () => {
+        const v = inp.value.trim();
+        if (v === inp.dataset.was) return;
+        const res = await send(`/api/admin/entries/${inp.dataset.bib}/bib`, 'POST', {bib: v});
+        if (res.error) {
+          inp.classList.add('bad');
+          toast(BIB_ERR[res.error] || 'Не сохранилось');
+          return;
+        }
+        inp.classList.remove('bad');
+        inp.value = res.bib; inp.dataset.was = res.bib;
+        toast(res.bib ? `Номер ${res.bib}` : 'Номер снят');
+      };
+      inp.addEventListener('change', save);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    });
+    const bg = $('bib-go');
+    if (bg) bg.onclick = async () => {
+      if (!bg.dataset.div) { toast('В категории нет активных заявок'); return; }
+      const over = $('bib-over').checked;
+      if (over && !confirm('Заменить уже выданные номера в этой категории? Напечатанные станут неверными.')) return;
+      const res = await send(`/api/admin/events/${eid}/bibs`, 'POST', {
+        division_id: +bg.dataset.div, start: +$('bib-from').value, overwrite: over});
+      if (res.error) { toast(BIB_ERR[res.error] || 'Не получилось'); return; }
+      toast(res.assigned ? `Выдано ${res.assigned}: ${res.from}–${res.to}` : 'Всем уже выданы номера');
+      loadEntries(eid);
+    };
     box.querySelectorAll('[data-pay-f]').forEach(b => b.onclick = () => {
       entryPay = b.dataset.payF;
       loadEntries(eid);
