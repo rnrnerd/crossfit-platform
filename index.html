@@ -778,6 +778,45 @@
     .heat-row.is-me { background:var(--plate); box-shadow:inset 3px 0 0 var(--accent), inset 0 -1px 0 var(--hair); }
     .heat-num { font-size:17px; font-weight:700; }
     .heat-time { flex:none; font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
+
+    /* ── Вкладки события: та же сетка, что у главной и обзора ──
+       Фильтр отбит от вкладок и от списка, чипы круглые, как в фильтрах поиска.
+       Комплексы — отдельные карточки на --plate: их читают по одному, а не
+       сравнивают в колонку. Лидерборд, расписание и заходы остаются строками —
+       там сравнивают по вертикали, и карточки разорвали бы таблицу. */
+    #screen-event .filt { gap:8px; margin-top:16px; }
+    #screen-event .filt + .filt { margin-top:8px; }
+    #screen-event .filt button { border-radius:999px; padding:8px 14px; font-size:14px; }
+    #screen-event .ev-find { margin:14px var(--pad) 0; }
+    #screen-event .ev-find input { border-radius:12px; height:46px; }
+
+    #screen-event .pick { padding:28px var(--pad) 12px; }
+    #screen-event .pick #lb-pick-name { font-size:20px; font-weight:800; letter-spacing:-.03em; }
+    #screen-event .lb-row { padding:14px var(--pad); }
+    #screen-event .lb-item.open .lb-detail { margin:0 var(--pad) 14px; padding:4px 14px 6px;
+      background:var(--plate); border-radius:14px; }
+    #screen-event .lb-item.open .lb-detail .pw, #screen-event .lb-item.open .lb-detail .pw-head {
+      padding-left:0; }
+
+    #screen-event .acc { margin:0 var(--pad) 10px; background:var(--plate); border-radius:16px;
+      box-shadow:none; overflow:hidden; }
+    /* первая карточка — после фильтра, а не вплотную к нему */
+    #screen-event .acc:not(.acc + .acc) { margin-top:20px; }
+    #screen-event .acc-head { padding:16px; }
+    #screen-event .acc-name { font-size:18px; font-weight:800; letter-spacing:-.03em; }
+    #screen-event .acc-body { padding:0 16px 16px; }
+    #screen-event .acc-term { background:rgba(255,255,255,.05); }
+
+    #screen-event .h.day { font-size:20px; letter-spacing:-.02em; padding:36px var(--pad) 10px; }
+    #screen-event .sch-row { padding:16px var(--pad); gap:16px; }
+    #screen-event .sch-time { width:54px; font-size:16px; font-weight:800; }
+    #screen-event .sch-title { font-size:16px; }
+    #screen-event .heat-row { padding:16px var(--pad); }
+    #screen-event .heat-num { font-size:16px; }
+    #screen-event .heat-time { font-size:15px; font-weight:800; background:var(--plate);
+      border-radius:9px; padding:6px 10px; }
+    #screen-event .heat-row.is-me .heat-time { background:rgba(168,204,58,.14); color:var(--accent); }
+    #screen-event .mine-heats { margin:20px var(--pad) 4px; border-radius:16px; padding:16px; }
     .phase { margin:16px var(--pad) 0; background:var(--plate); border-radius:12px; padding:15px 16px; }
     .phase-label { font-size:13px; color:var(--steel); }
     .phase-line { display:flex; align-items:center; gap:12px; margin-top:8px; }
@@ -1175,7 +1214,7 @@
         if (t.dataset.screen === (name === 'profile-edit' ? 'profile' : name)) t.setAttribute('aria-current','page');
         else t.removeAttribute('aria-current');
       });
-      if (name !== 'event') { $('ev-segs').hidden = true; $('lb-pinned').hidden = true; }
+      if (name !== 'event') { $('ev-segs').hidden = true; lbObserver?.disconnect(); $('lb-pinned').hidden = true; }
       renderBar(name, innerTitle);
       window.scrollTo(0,0);
       if (name === 'home')    loadHome();
@@ -1571,6 +1610,9 @@
         renderEvent(evCur);
         window.scrollTo(0, 0);
       });
+      // Лидерборд уходит из DOM — наблюдатель за своей строкой снимаем, иначе он
+      // считает строку «ушедшей из виду» и показывает копию на чужой вкладке.
+      lbObserver?.disconnect();
       $('lb-pinned').hidden = true;
       if (evTab === 'overview') renderOverview(ev);
       if (evTab === 'protocol') loadProtocol(ev);
