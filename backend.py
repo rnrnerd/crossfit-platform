@@ -206,6 +206,9 @@ CREATE TABLE IF NOT EXISTS divisions (
 );
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS price INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT '';
+-- feed_url, feed_category, feed_gender остались от моста к внешнему модулю,
+-- снятого 15.09.2026. Код их не читает; столбцы не удаляем в той же выкладке,
+-- что и код: старый контейнер, пока жив, ещё обращается к ним.
 ALTER TABLE events ADD COLUMN IF NOT EXISTS feed_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE news ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
 ALTER TABLE partners ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT '';
@@ -557,9 +560,7 @@ async def h_me_history(r):
     число в профиле не должно расходиться с протоколом на награждении. Берём
     заявки, по которым внесён хотя бы один результат, — иначе у старта, где
     никто ещё не выходил на площадку, вышло бы «место» из одних нулей.
-    События на внешнем модуле сюда не попадают: там результат не связан
-    с заявкой (#29). В сводку идут только завершённые старты — место на идущем
-    ещё поменяется.
+    В сводку идут только завершённые старты — место на идущем ещё поменяется.
     """
     u = await current_user(r)
     if not u:
@@ -574,7 +575,7 @@ async def h_me_history(r):
                JOIN entries en  ON en.id = m.entry_id AND en.status = 'active'
                JOIN events e    ON e.id = en.event_id
                JOIN divisions d ON d.id = en.division_id
-               WHERE m.user_id = $1 AND e.feed_url = ''
+               WHERE m.user_id = $1
                  AND e.status IN ('live', 'finished')
                  AND EXISTS (SELECT 1 FROM results x WHERE x.entry_id = en.id)
                ORDER BY e.date_start DESC NULLS LAST, e.id DESC""", u["id"])
@@ -1893,237 +1894,6 @@ async def h_invite_answer(r):
     return _json({"ok": True, "full": full})
 
 
-# ── Внешний соревновательный модуль ──────────────────────────────────
-# Турнир может идти в отдельном сервисе (crossfit-comp) со своей админкой.
-# Платформа читает его по HTTP и приводит ответы к своей форме, поэтому
-# экраны не знают, откуда пришли данные, и боевой модуль не трогается.
-#
-# Модуль односоставный: один сервис = одно соревнование, группа задаётся
-# парой «категория + пол», а не id дивизиона. Сопоставление лежит
-# в divisions.feed_category / feed_gender.
-
-FEED_TTL = 15          # живой старт: чаще опрашивать модуль незачем
-FEED_TIMEOUT = 6
-_feed_cache = {}       # base_url → (истекает, снимок)
-
-
-def _homoglyphs():
-    # латинские буквы, визуально неотличимые от кириллических: в выгрузках
-    # они встречаются вперемешку
-    return str.maketrans({
-        "a": "а", "b": "в", "c": "с", "e": "е", "h": "н", "k": "к", "m": "м",
-        "o": "о", "p": "р", "t": "т", "u": "и", "x": "х", "y": "у",
-    })
-
-
-_HG = _homoglyphs()
-
-
-def norm_name(x):
-    """Нормализация ФИО для сопоставления.
-
-    Единственное место, где приходится узнавать человека по тексту: у модуля
-    нет id пользователей, атлеты в нём — строки. Внутри платформы такого слоя
-    нет и быть не должно.
-    """
-    import unicodedata
-    x = unicodedata.normalize("NFC", x or "")
-    x = x.replace("\u200b", " ")
-    for ch in "\u200c\u200d\u200e\u200f\ufeff\u00ad":
-        x = x.replace(ch, "")
-    x = x.lower().replace("ё", "е").translate(_HG)
-    x = "".join(c if (c.isalpha() or c.isspace()) else " " for c in x)
-    return " ".join(x.split())
-
-
-def name_keys(x):
-    """Ключи сопоставления: порядок слов в базах разный («Иванов Иван» и «Иван Иванов»)."""
-    n = norm_name(x)
-    parts = n.split()
-    keys = {n}
-    if len(parts) >= 2:
-        keys.add(" ".join(sorted(parts[:2])))
-        keys.add(" ".join(sorted(parts)))
-    return keys
-
-
-def _same_person(a, b):
-    return bool(name_keys(a) & name_keys(b))
-
-
-async def feed_snapshot(base):
-    """Все четыре ответа модуля одним снимком, с общим кэшем.
-
-    Экран события спрашивает и содержимое вкладок, и сами вкладки, поэтому
-    дёргать модуль по частям на каждый запрос нельзя: во время старта в него
-    смотрят все участники сразу.
-    """
-    import time as _t
-    base = base.rstrip("/")
-    hit = _feed_cache.get(base)
-    if hit and hit[0] > _t.monotonic():
-        return hit[1]
-
-    import aiohttp
-    paths = {"leaderboard": "/api/leaderboard", "wods": "/api/wods",
-             "schedule": "/api/schedule", "heats": "/api/heats"}
-    snap = {"ok": False, "error": "", "base": base, "leaderboard": [], "wods": [],
-            "schedule": [], "heats": []}
-    timeout = aiohttp.ClientTimeout(total=FEED_TIMEOUT)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async def one(key, path):
-                async with sess.get(base + path) as r:
-                    if r.status != 200:
-                        raise RuntimeError(f"{path} → {r.status}")
-                    return key, await r.json(content_type=None)
-            got = await asyncio.gather(*(one(k, v) for k, v in paths.items()))
-        for k, v in got:
-            snap[k] = v if isinstance(v, list) else []
-        snap["ok"] = True
-    except Exception as e:
-        snap["error"] = str(e)[:200]
-        logger.warning("Модуль %s недоступен: %s", base, snap["error"])
-        # неудачу кэшируем коротко, чтобы не выстраивать очередь к лежащему модулю
-        _feed_cache[base] = (_t.monotonic() + 5, snap)
-        return snap
-
-    _feed_cache[base] = (_t.monotonic() + FEED_TTL, snap)
-    return snap
-
-
-def _feed_divisions(divs, category, gender):
-    """Дивизионы платформы по ключу модуля.
-
-    Ключ бывает неполным: комплекс «для категории Продвинутые» без указания
-    пола относится и к мужскому, и к женскому дивизиону. Поэтому пустая часть
-    ключа означает «любой», а не «пустая строка».
-    Дивизионы без сопоставления не подтягиваем: они к модулю не относятся.
-    """
-    return [d["name"] for d in divs
-            if d["feed_category"]
-            and (not category or d["feed_category"] == category)
-            and (not gender or d["feed_gender"] == gender)]
-
-
-def _feed_group(divs, category, gender):
-    """Одно название для строки расписания или старт-листа."""
-    names = _feed_divisions(divs, category, gender)
-    if names:
-        return ", ".join(names)
-    return " ".join(x for x in [category, gender] if x)
-
-
-def feed_leaderboard(snap, division, me_name):
-    """Протокол модуля → форма платформы.
-
-    У модуля свой формат разбивки: список комплексов с местом и баллами.
-    Идентификатора заявки там нет, поэтому «это вы» проставляем по имени.
-    """
-    cat, gen = division["feed_category"], division["feed_gender"]
-    rows_in = [r for r in snap["leaderboard"]
-               if (r.get("category") or "") == cat and (r.get("gender") or "") == gen]
-    rows = []
-    for i, r in enumerate(rows_in):
-        wods = r.get("wods")
-        per = []
-        if isinstance(wods, list):
-            for w in wods:
-                per.append({
-                    "wod_id": None, "name": w.get("name", ""),
-                    "result_type": w.get("result_type", ""),
-                    "value": w.get("result"), "tiebreak": None,
-                    "status": "ok" if w.get("result") is not None else "",
-                    "place": w.get("place"), "points": w.get("points", 0),
-                })
-        rows.append({
-            "entry_id": None,
-            "name": r.get("name", ""),
-            "members": [],
-            "avatar": _feed_asset(snap, r.get("avatar", "")),
-            "points": r.get("points", 0),
-            "place": i + 1,
-            "wods": per,
-            "is_me": bool(me_name and _same_person(me_name, r.get("name", ""))),
-        })
-    total = len({w["name"] for r in rows for w in r["wods"] if w["name"]})
-    done = len({w["name"] for r in rows for w in r["wods"] if w["place"]})
-    return {"division": {"id": division["id"], "name": division["name"],
-                         "team_size": division["team_size"]},
-            "wods_total": total, "wods_done": done, "rows": rows}
-
-
-def _feed_asset(snap, url):
-    """Ссылки на фото модуль отдаёт относительными — дописываем его адрес."""
-    base = snap.get("base", "")
-    if not url:
-        return ""
-    return url if url.startswith("http") else base + url
-
-
-def feed_wods(snap, divs):
-    out = []
-    for w in snap["wods"]:
-        cats = w.get("categories") or []
-        gens = w.get("genders") or []
-        names = []
-        if cats or gens:
-            for c in (cats or [""]):
-                for g in (gens or [""]):
-                    names.extend(_feed_divisions(divs, c, g))
-            # ключ мог никуда не сопоставиться — показываем как в модуле
-            if not names:
-                names = [" ".join(x for x in [c, g] if x)
-                         for c in (cats or [""]) for g in (gens or [""])]
-        out.append({
-            "id": w.get("id"), "ord": w.get("order", 0), "name": w.get("name", ""),
-            "description": w.get("description", ""),
-            "result_type": w.get("result_type", ""),
-            "time_cap": w.get("time_cap", ""), "stage": "",
-            # у модуля формат подсчёта — готовая строка («AMRAP 10 мин»)
-            "scoring_note": w.get("scoring", ""),
-            "day": w.get("day", ""),
-            "divisions": [{"id": None, "name": n} for n in dict.fromkeys(names)],
-        })
-    return out
-
-
-def feed_schedule(snap, divs):
-    return [{
-        "id": s.get("id"), "day": s.get("day", ""), "time": s.get("time", ""),
-        "title": s.get("title", ""), "location": s.get("location", ""),
-        "division": (_feed_group(divs, s.get("category"), s.get("gender"))
-                     if (s.get("category") or s.get("gender")) else ""),
-    } for s in snap["schedule"]]
-
-
-def feed_heats(snap, divs, me_name):
-    out = []
-    for h in snap["heats"]:
-        group = _feed_group(divs, h.get("category"), h.get("gender"))
-        out.append({
-            "id": h.get("id"), "number": h.get("heat", 0), "wod": h.get("wod", ""),
-            "wod_id": None, "day": h.get("day", ""),
-            "briefing_start": h.get("briefing_start", ""),
-            "briefing_end": h.get("briefing_end", ""),
-            "start_time": h.get("start_time", ""), "location": h.get("location", ""),
-            "entries": [{
-                "lane": a.get("lane", 0), "entry_id": None,
-                "name": a.get("name", ""), "members": [],
-                "division": a.get("category") or group,
-                "avatar": _feed_asset(snap, a.get("avatar", "")),
-                "is_me": bool(me_name and _same_person(me_name, a.get("name", ""))),
-            } for a in (h.get("athletes") or [])],
-        })
-    return out
-
-
-async def _event_divs_for_feed(c, event_id):
-    return [dict(x) for x in await c.fetch(
-        """SELECT id, name, team_size, feed_category, feed_gender
-           FROM divisions WHERE event_id=$1 ORDER BY ord, id""", event_id)]
-
-
 # ── Подсчёт протокола ────────────────────────────────────────────────
 # Логика перенесена из соревновательного модуля (crossfit-comp) без изменений
 # по смыслу: место в комплексе → баллы за место → сумма по комплексам.
@@ -2290,17 +2060,11 @@ async def h_leaderboard(r):
 
     async with db_pool.acquire() as c:
         d = await c.fetchrow(
-            """SELECT id, name, team_size, feed_category, feed_gender
+            """SELECT id, name, team_size
                FROM divisions WHERE id=$1 AND event_id=$2""", did, eid)
         if not d:
             return _json({"error": "division_not_found"}, status=404)
-        feed = await c.fetchval("SELECT feed_url FROM events WHERE id=$1", eid)
         me = await current_user(r)
-        if feed:
-            snap = await feed_snapshot(feed)
-            if not snap["ok"]:
-                return _json({"error": "feed_unavailable"}, status=503)
-            return _json(feed_leaderboard(snap, dict(d), me["name"] if me else ""))
         wods, entries, res, points, places = await _division_table(c, eid, did)
         mine = await _my_entry(c, eid, me["id"]) if me else None
         mine_entry = mine["id"] if mine else None
@@ -2323,12 +2087,6 @@ async def h_event_wods(r):
     except ValueError:
         return _json({"error": "bad_id"}, status=404)
     async with db_pool.acquire() as c:
-        feed = await c.fetchval("SELECT feed_url FROM events WHERE id=$1", eid)
-        if feed:
-            snap = await feed_snapshot(feed)
-            if not snap["ok"]:
-                return _json({"error": "feed_unavailable"}, status=503)
-            return _json(feed_wods(snap, await _event_divs_for_feed(c, eid)))
         rows = await c.fetch(
             "SELECT * FROM wods WHERE event_id=$1 ORDER BY ord, id", eid)
         links = await c.fetch(
@@ -2353,12 +2111,6 @@ async def h_event_schedule(r):
     except ValueError:
         return _json({"error": "bad_id"}, status=404)
     async with db_pool.acquire() as c:
-        feed = await c.fetchval("SELECT feed_url FROM events WHERE id=$1", eid)
-        if feed:
-            snap = await feed_snapshot(feed)
-            if not snap["ok"]:
-                return _json({"error": "feed_unavailable"}, status=503)
-            return _json(feed_schedule(snap, await _event_divs_for_feed(c, eid)))
         rows = await c.fetch(
             """SELECT s.*, d.name AS division FROM schedule s
                LEFT JOIN divisions d ON d.id = s.division_id
@@ -2377,14 +2129,6 @@ async def h_event_heats(r):
         return _json({"error": "bad_id"}, status=404)
     my_entry_id = None
     async with db_pool.acquire() as c:
-        feed = await c.fetchval("SELECT feed_url FROM events WHERE id=$1", eid)
-        if feed:
-            snap = await feed_snapshot(feed)
-            if not snap["ok"]:
-                return _json({"error": "feed_unavailable"}, status=503)
-            me = await current_user(r)
-            return _json(feed_heats(snap, await _event_divs_for_feed(c, eid),
-                                    me["name"] if me else ""))
         me = await current_user(r)
         if me:
             mine = await _my_entry(c, eid, me["id"])
@@ -2540,18 +2284,6 @@ async def h_event(r):
             if mine and mine["team_size"] > 1 else None
         invites = await _my_invites(c, me["id"], eid) if me and not mine else []
 
-    # Запрос к модулю — уже вне пула: сетевой вызов не должен держать
-    # соединение к базе, иначе лежащий модуль выест пул на живом старте.
-    feed_down = False
-    if ev["feed_url"]:
-        snap = await feed_snapshot(ev["feed_url"])
-        feed_down = not snap["ok"]
-        counts = {"wods": len(snap["wods"]), "schedule": len(snap["schedule"]),
-                  "heats": len(snap["heats"]), "results": len(snap["leaderboard"])}
-        if feed_down:
-            # модуль лёг — вкладки всё равно показываем, внутри будет честная
-            # ошибка: «протокола нет» и «связи нет» это разные сообщения
-            counts = {"wods": 1, "schedule": 1, "heats": 1, "results": 1}
     return _json({
         "id": ev["id"], "slug": ev["slug"], "title": ev["title"],
         "description": ev["description"], "city": ev["city"], "venue": ev["venue"],
@@ -2569,7 +2301,6 @@ async def h_event(r):
         "reg_open": _reg_open(ev),
         "pay_info": ev["pay_info"], "pay_url": ev["pay_url"],
         "has": {k: int(v) for k, v in counts.items()},
-        "feed": bool(ev["feed_url"]), "feed_down": feed_down,
         "profile_complete": bool(me and me["name"] and me["gender"]) if me else False,
         "divisions": [{"id": d["id"], "name": d["name"], "team_size": d["team_size"],
                        "gender_rule": d["gender_rule"], "max_entries": d["max_entries"],
@@ -2674,7 +2405,7 @@ async def a_events(r):
     async with db_pool.acquire() as c:
         rows = await c.fetch(
             """SELECT e.id, e.slug, e.title, e.city, e.status, e.visibility,
-                      e.date_start, e.feed_url, e.banner_v, e.mark_v,
+                      e.date_start, e.banner_v, e.mark_v,
                       (SELECT COUNT(*) FROM divisions d WHERE d.event_id=e.id) AS divisions,
                       (SELECT COUNT(*) FROM entries en
                         WHERE en.event_id=e.id AND en.status='active')          AS entries
@@ -2684,14 +2415,14 @@ async def a_events(r):
     return _json([{
         "id": x["id"], "slug": x["slug"], "title": x["title"], "city": x["city"],
         "status": x["status"], "visibility": x["visibility"],
-        "date_start": str(x["date_start"] or ""), "feed_url": x["feed_url"],
+        "date_start": str(x["date_start"] or ""),
         "has_banner": bool(x["banner_v"]), "has_mark": bool(x["mark_v"]),
         "divisions": x["divisions"], "entries": x["entries"],
     } for x in rows])
 
 
 EVENT_FIELDS = ("title", "description", "city", "venue", "status", "visibility",
-                "telegram", "instagram", "feed_url", "pay_url")
+                "telegram", "instagram", "pay_url")
 EVENT_DATES = ("date_start", "date_end", "reg_opens_at", "reg_closes_at",
                "qual_start", "qual_end")
 
@@ -2745,14 +2476,14 @@ async def a_event_save(r):
         if eid:
             row = await c.fetchrow(
                 """UPDATE events SET title=$2, description=$3, city=$4, venue=$5,
-                        status=$6, visibility=$7, telegram=$8, instagram=$9, feed_url=$10,
-                        pay_info=$11, pay_url=$12, pay_days=$13,
-                        date_start=$14, date_end=$15, reg_opens_at=$16, reg_closes_at=$17,
-                        qual_start=$18, qual_end=$19
+                        status=$6, visibility=$7, telegram=$8, instagram=$9,
+                        pay_info=$10, pay_url=$11, pay_days=$12,
+                        date_start=$13, date_end=$14, reg_opens_at=$15, reg_closes_at=$16,
+                        qual_start=$17, qual_end=$18
                    WHERE id=$1 RETURNING id""",
                 int(eid), vals["title"], vals["description"], vals["city"], vals["venue"],
                 vals["status"], vals["visibility"], vals["telegram"], vals["instagram"],
-                vals["feed_url"], vals["pay_info"], vals["pay_url"], vals["pay_days"],
+                vals["pay_info"], vals["pay_url"], vals["pay_days"],
                 *[dates[k] for k in EVENT_DATES])
             if not row:
                 return _json({"error": "not_found"}, status=404)
@@ -2767,14 +2498,14 @@ async def a_event_save(r):
                 uniq, n = f"{slug}-{n}", n + 1
             new_id = await c.fetchval(
                 """INSERT INTO events (slug, title, description, city, venue, status,
-                        visibility, telegram, instagram, feed_url,
+                        visibility, telegram, instagram,
                         pay_info, pay_url, pay_days,
                         date_start, date_end, reg_opens_at, reg_closes_at, qual_start, qual_end)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
                    RETURNING id""",
                 uniq, vals["title"], vals["description"], vals["city"], vals["venue"],
                 vals["status"], vals["visibility"], vals["telegram"], vals["instagram"],
-                vals["feed_url"], vals["pay_info"], vals["pay_url"], vals["pay_days"],
+                vals["pay_info"], vals["pay_url"], vals["pay_days"],
                 *[dates[k] for k in EVENT_DATES])
         logger.info("Админка: событие %s сохранено", new_id)
     return _json({"ok": True, "id": new_id})
@@ -2810,7 +2541,7 @@ async def a_event_one(r):
                     WHERE w.event_id=$1)                           AS results""", eid)
     out = {k: (str(ev[k]) if isinstance(ev[k], date) else ev[k])
            for k in ("id", "slug", "title", "description", "city", "venue", "status",
-                     "visibility", "telegram", "instagram", "feed_url",
+                     "visibility", "telegram", "instagram",
                      "pay_info", "pay_url", "pay_days") + EVENT_DATES}
     for k in EVENT_DATES:
         out[k] = str(ev[k] or "")
@@ -2821,7 +2552,6 @@ async def a_event_one(r):
         "id": d["id"], "name": d["name"], "team_size": d["team_size"],
         "gender_rule": d["gender_rule"], "level": d["level"], "price": d["price"],
         "max_entries": d["max_entries"], "ord": d["ord"],
-        "feed_category": d["feed_category"], "feed_gender": d["feed_gender"],
     } for d in divs]
     return _json(out)
 
@@ -2885,16 +2615,14 @@ async def a_division_save(r):
     ordv = num("ord", 0, 999, 0)
     limit = body.get("max_entries")
     limit = int(limit) if str(limit or "").isdigit() and int(limit) > 0 else None
-    fc = _clean(body.get("feed_category"), 80)
-    fg = _clean(body.get("feed_gender"), 8)
 
     async with db_pool.acquire() as c:
         if did:
             row = await c.fetchrow(
                 """UPDATE divisions SET name=$2, team_size=$3, gender_rule=$4, level=$5,
-                        price=$6, max_entries=$7, ord=$8, feed_category=$9, feed_gender=$10
+                        price=$6, max_entries=$7, ord=$8
                    WHERE id=$1 RETURNING id""",
-                int(did), name, team, rule, level, price, limit, ordv, fc, fg)
+                int(did), name, team, rule, level, price, limit, ordv)
             if not row:
                 return _json({"error": "not_found"}, status=404)
             return _json({"ok": True, "id": row["id"]})
@@ -2904,9 +2632,9 @@ async def a_division_save(r):
             return _json({"error": "bad_request"}, status=400)
         new_id = await c.fetchval(
             """INSERT INTO divisions (event_id, name, team_size, gender_rule, level,
-                    price, max_entries, ord, feed_category, feed_gender)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id""",
-            eid, name, team, rule, level, price, limit, ordv, fc, fg)
+                    price, max_entries, ord)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""",
+            eid, name, team, rule, level, price, limit, ordv)
     return _json({"ok": True, "id": new_id})
 
 

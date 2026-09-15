@@ -467,7 +467,7 @@
       </div>
       <table>
         <tr><th>Название</th><th>Город</th><th>Статус</th><th>Начало</th>
-            <th>Картинки</th><th>Источник</th><th class="num">Див.</th><th class="num">Заявок</th></tr>
+            <th>Картинки</th><th class="num">Див.</th><th class="num">Заявок</th></tr>
         ${list.map(e => `
           <tr class="click" data-id="${e.id}">
             <td><b>${esc(e.title)}</b><div class="muted">${esc(e.slug)}</div></td>
@@ -477,7 +477,6 @@
             <td>${e.has_banner ? '<span class="tag">афиша</span> ' : ''}${
                   e.has_mark ? '<span class="tag">знак</span>' : ''}${
                   !e.has_banner && !e.has_mark ? '<span class="muted">нет</span>' : ''}</td>
-            <td>${e.feed_url ? '<span class="tag on">модуль</span>' : '<span class="muted">свои данные</span>'}</td>
             <td class="num">${e.divisions}</td><td class="num">${e.entries}</td>
           </tr>`).join('')}
       </table>`;
@@ -569,9 +568,6 @@
           <div class="muted">Платформа денег не принимает — этот текст атлет видит
             сразу после подачи заявки. Неоплаченная заявка держит место до срока,
             потом снимается автоматически.</div></div>
-        <div class="f wide"><label for="ev-feed">Адрес соревновательного модуля</label>
-          <input id="ev-feed" type="url" value="${esc(ev.feed_url)}"
-                 placeholder="https://… — пусто, если турнир ведётся в платформе" /></div>
       </div>
       <div class="err" id="ev-err" hidden></div>
       <div class="bar save"><button class="btn" id="ev-save">Сохранить</button></div>
@@ -600,10 +596,6 @@
           <h2>Категории</h2><button class="btn quiet" id="new-div">Добавить</button>
         </div>
         <div id="divs"></div>
-        ${ev.feed_url ? `<div class="warn"><b>Турнир ведётся во внешнем модуле.</b>
-          Протокол, комплексы, расписание и заходы приходят оттуда. Чтобы категория
-          попала в протокол, заполните у неё «Категория в модуле» и «Пол в модуле» —
-          модуль знает не её, а пару «категория + пол» в своих терминах.</div>` : ''}
       </div>
 
       <div class="epane" id="p-wod"${pane === 'wod' ? '' : ' hidden'}>
@@ -660,7 +652,7 @@
       EV_TABS.forEach(([t]) => { $('p-' + t).hidden = t !== k; });
       if (loaded[k]) return;
       loaded[k] = true;
-      if (k === 'div') renderDivs(id, ev.divisions, !!ev.feed_url);
+      if (k === 'div') renderDivs(id, ev.divisions);
       if (k === 'wod') loadWods(id, ev.divisions);
       if (k === 'hea') loadHeats(id, ev.divisions);
       if (k === 'sch') loadSchedule(id, ev.divisions);
@@ -686,7 +678,7 @@
       reg_opens_at: $('ev-ro').value, reg_closes_at: $('ev-rc').value,
       qual_start: $('ev-qs').value, qual_end: $('ev-qe').value,
       telegram: $('ev-tg').value, instagram: $('ev-ig').value,
-      description: $('ev-desc').value, feed_url: $('ev-feed').value,
+      description: $('ev-desc').value, 
       pay_info: $('ev-payinfo').value, pay_url: $('ev-payurl').value,
       pay_days: $('ev-paydays').value,
     };
@@ -716,13 +708,13 @@
     toast(kind === 'banner' ? 'Афиша обновлена' : 'Знак обновлён');
   }
 
-  function renderDivs(eid, divs, feed) {
+  function renderDivs(eid, divs) {
     $('divs').innerHTML = !divs.length
       ? '<div class="note">Категорий нет. Без них нельзя подать заявку.</div>'
       : `<table>
           <tr><th>Название</th><th>Уровень</th><th>Состав</th><th>Пол</th>
               <th class="num">Цена</th><th class="num">Лимит</th>
-              ${feed ? '<th>В модуле</th>' : ''}<th></th></tr>
+              <th></th></tr>
           ${divs.map(d => `
             <tr data-id="${d.id}">
               <td><b>${esc(d.name)}</b></td>
@@ -732,9 +724,6 @@
               <td>${(d.team_size > 1 ? TEAM_RULE : RULE)[d.gender_rule] || d.gender_rule}</td>
               <td class="num">${fmtMoney(d.price)}</td>
               <td class="num">${d.max_entries || '—'}</td>
-              ${feed ? `<td>${d.feed_category
-                ? esc(d.feed_category + ' / ' + (d.feed_gender || 'любой'))
-                : '<span class="muted">не задано</span>'}</td>` : ''}
               <td><button class="btn link" data-edit="${d.id}">Изменить</button>
                   <button class="btn link danger" data-del="${d.id}">Удалить</button></td>
             </tr>`).join('')}
@@ -753,7 +742,7 @@
 
   function divRow(eid, d) {
     d = d || {name:'', level:'', team_size:1, gender_rule:'any', price:0,
-              max_entries:'', ord:0, feed_category:'', feed_gender:''};
+              max_entries:'', ord:0};
     const m = $('main');
     const prev = m.innerHTML;
     m.innerHTML = `
@@ -772,8 +761,6 @@
         ${F('d-price', 'Цена, ₽', d.price, 'number', 'min="0"')}
         ${F('d-limit', 'Лимит заявок (пусто — без лимита)', d.max_entries ?? '', 'number', 'min="1"')}
         ${F('d-ord', 'Порядок', d.ord, 'number', 'min="0"')}
-        ${F('d-fc', 'Категория в модуле', d.feed_category)}
-        ${F('d-fg', 'Пол в модуле (М / Ж)', d.feed_gender)}
       </div>
       <div class="err" id="d-err" hidden></div>
       <div class="bar save"><button class="btn" id="d-save">Сохранить</button></div>`;
@@ -808,7 +795,7 @@
         event_id: eid, name: $('d-name').value, level: $('d-level').value,
         team_size: $('d-team').value, gender_rule: $('d-rule').value,
         price: $('d-price').value, max_entries: $('d-limit').value,
-        ord: $('d-ord').value, feed_category: $('d-fc').value, feed_gender: $('d-fg').value,
+        ord: $('d-ord').value,
       };
       const res = await send(d.id ? '/api/admin/divisions/' + d.id : '/api/admin/divisions',
                              d.id ? 'PUT' : 'POST', body);

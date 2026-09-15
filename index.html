@@ -1759,7 +1759,7 @@
             <div class="hero-value${
               hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
             }">${esc(hero.value)}</div>
-            ${ev.my_entry ? '' : feeLine(ev)}
+            ${ev.my_entry || ev.status === 'finished' ? '' : feeLine(ev)}
           </div>
           <div class="fact-act">${actionBlock(ev)}</div>
         </div>
@@ -1789,6 +1789,8 @@
     // Стоимость участия одной цифрой. «от» появляется, только когда цены
     // категорий расходятся; бесплатная категория рядом с платными «от» описать
     // нельзя, поэтому там честный диапазон.
+    // У завершённого старта цена уже никому не нужна, а у перенесённых из модуля
+    // её нет вовсе — «Бесплатно» было бы враньём.
     // У заявленного строки нет: цену его категории и срок оплаты называет
     // блок заявки ниже в той же карточке, «от 3 500 ₽» рядом с «4 500 ₽» путало.
     function feeLine(ev) {
@@ -1802,10 +1804,6 @@
       return `<div class="hero-fee">Участие<span>${esc(sum)}</span></div>`;
     }
 
-    // Модуль соревнования недоступен — это не «данных нет», а «нет связи»:
-    // во время старта разница принципиальная.
-    const FEED_DOWN = `<div class="note">Связи с системой соревнования нет.<br>
-      Данные появятся, как только она ответит.</div>`;
 
     // ── Лидерборд ──
     const RES_LABEL = {time:'Время', reps:'Повторы', weight:'Вес'};
@@ -1861,12 +1859,6 @@
       const body = $('lb-body');
       body.innerHTML = skeleton(1);
       const d = await api(`/api/events/${ev.id}/leaderboard?division=${lbDiv}`);
-      if (d.error === 'feed_unavailable') {
-        // рядом с ошибкой не должно висеть «Считаем…»
-        $('lb-prog').textContent = '';
-        body.innerHTML = FEED_DOWN;
-        return;
-      }
       if (d.error) {
         $('lb-prog').textContent = '';
         body.innerHTML = '<div class="note">Лидерборд не загрузился.</div>';
@@ -1966,7 +1958,6 @@
       const box = $('event-body');
       box.innerHTML = skeleton(1);
       const list = await api(`/api/events/${ev.id}/wods`);
-      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Комплексы не загрузились.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Комплексы пока не объявлены.</div>'; return; }
       // комплекс без категорий идёт у всех — он остаётся при любом фильтре
@@ -2022,7 +2013,6 @@
       const box = $('event-body');
       box.innerHTML = skeleton(1);
       const list = await api(`/api/events/${ev.id}/schedule`);
-      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Расписание не загрузилось.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Расписание пока не опубликовано.</div>'; return; }
       // строка без категории — общая (регистрация, перерыв, награждение),
@@ -2050,7 +2040,6 @@
       const box = $('event-body');
       box.innerHTML = skeleton(1);
       const list = await api(`/api/events/${ev.id}/heats`);
-      if (list && list.error === 'feed_unavailable') { box.innerHTML = FEED_DOWN; return; }
       if (!Array.isArray(list)) { box.innerHTML = '<div class="note">Заходы не загрузились.</div>'; return; }
       if (!list.length) { box.innerHTML = '<div class="note">Заходы пока не опубликованы.</div>'; return; }
       evHeats = list;
