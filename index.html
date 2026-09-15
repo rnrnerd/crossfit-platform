@@ -232,6 +232,38 @@
     .article p { font-size:16px; line-height:1.6; padding:16px var(--pad) 0; white-space:pre-line; }
     .article .lead { color:var(--steel); }
 
+    /* ── Новости: свежая новость крупно, остальные строками ──
+       Первая новость раздела — во всю ширину, как слайд на главной: лента
+       начинается с события, а не со списка. Раздел и дата одной подписью:
+       раздел лаймом — это метка, а не данные. */
+    .news-lead { display:block; width:100%; text-align:left; border:none; background:none;
+      cursor:pointer; padding:0 0 22px; box-shadow:inset 0 -1px 0 var(--hair); }
+    .news-lead .art { aspect-ratio:16/9; }
+    .news-lead .stub { font-size:22px; }
+    .news-lead-txt { padding:16px var(--pad) 0; }
+    .news-lead-title { font-size:22px; font-weight:800; line-height:1.2; letter-spacing:-.03em;
+      margin-top:6px; text-wrap:balance; }
+    .news-lead .news-sum { font-size:14px; margin-top:8px; }
+    .news-meta { font-size:12px; color:var(--steel); display:flex; align-items:center; gap:6px; }
+    .news-meta b { font-weight:600; color:var(--accent); }
+    .news-row { padding:18px var(--pad); }
+    /* главная новость тоже .news-row (общий обработчик тапа) — снимаем строчную раскладку */
+    .news-row.news-lead { display:block; padding:0 0 22px; }
+    .news-row .news-thumb { width:104px; border-radius:12px; }
+    .news-row .news-meta { margin-top:8px; }
+    .article .news-meta { padding:20px var(--pad) 0; font-size:13px; }
+    .article h1 { font-size:28px; font-weight:800; letter-spacing:-.03em; padding-top:8px; text-wrap:balance; }
+    .article .lead { font-size:17px; line-height:1.55; padding-top:18px; }
+    .article p { line-height:1.65; }
+    .article .pt-card { margin-top:32px; }
+
+    /* ── Лента поиска: больше воздуха между стартами ── */
+    #screen-search .feed-item { padding-bottom:40px; }
+    #screen-search .feed-txt { padding-top:16px; }
+    #screen-search .feed-title { font-size:22px; font-weight:800; letter-spacing:-.03em; margin-top:6px; }
+    #screen-search .tags { margin-top:12px; }
+    #screen-search .segs { margin-bottom:16px; }
+
     /* ── Экран события ── */
     .ev-head { padding:0 var(--pad); position:relative; }
     .mark { width:56px; height:56px; border-radius:50%; background:var(--plate);
@@ -2327,6 +2359,7 @@
     }
 
     // ── Новости ──
+    const NEWS_CAT = {ru: 'CF Россия', world: 'CF Мир'};
     const NEWS_SEGS = [
       ['all',   'Все',       () => true],
       ['ru',    'CF Россия', n => n.category === 'ru'],
@@ -2371,7 +2404,22 @@
         return;
       }
       const p = partner && !partner.error ? partner : null;
-      box.innerHTML = (p ? partnerLine(p) : '') + list.map(n => `
+      const meta = n => `<div class="news-meta">${NEWS_CAT[n.category]
+        ? `<b>${NEWS_CAT[n.category]}</b><span>·</span>` : ''}<span>${esc(fmtNewsDate(n.published_at))}</span></div>`;
+      const [first, ...rest] = list;
+      const lead = `
+        <button class="news-row news-lead" data-id="${first.id}">
+          <div class="art">${first.has_image
+            ? `<img src="/api/news-image/${first.id}?v=${first.image_v}" alt="">`
+            : `<div class="stub" aria-hidden="true">${esc(first.title)}</div>`}</div>
+          <div class="news-lead-txt">
+            ${meta(first)}
+            <div class="news-lead-title">${esc(first.title)}</div>
+            ${first.summary ? `<div class="news-sum">${esc(first.summary)}</div>` : ''}
+            ${p && first.partner_id === p.id ? partnerTag(p) : ''}
+          </div>
+        </button>`;
+      box.innerHTML = (p ? partnerLine(p) : '') + lead + rest.map(n => `
         <button class="news-row" data-id="${n.id}">
           <div class="news-thumb">${n.has_image
             ? `<img src="/api/news-image/${n.id}?v=${n.image_v}" alt="" loading="lazy">`
@@ -2379,7 +2427,7 @@
           <div>
             <div class="news-title">${esc(n.title)}</div>
             ${n.summary ? `<div class="news-sum">${esc(n.summary)}</div>` : ''}
-            <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
+            ${meta(n)}
             ${p && n.partner_id === p.id ? partnerTag(p) : ''}
           </div>
         </button>`).join('')
@@ -2418,8 +2466,9 @@
       box.innerHTML = `
         <div class="article">
           ${n.has_image ? `<div class="art"><img src="/api/news-image/${n.id}?v=${n.image_v}" alt=""></div>` : ''}
+          <div class="news-meta">${NEWS_CAT[n.category] ? `<b>${NEWS_CAT[n.category]}</b><span>·</span>` : ''}<span>${
+            esc(fmtNewsDate(n.published_at))}</span></div>
           <h1>${esc(n.title)}</h1>
-          <div class="news-date">${esc(fmtNewsDate(n.published_at))}</div>
           ${lead ? `<p class="lead">${esc(lead)}</p>` : ''}
           ${n.body ? `<p>${esc(n.body)}</p>` : ''}
           ${(partner && !partner.error && n.partner_id === partner.id)
