@@ -377,6 +377,10 @@
     .tile b small { font-size:13px; font-weight:500; color:var(--steel); margin-left:3px; letter-spacing:0; }
     .tile span { display:block; font-size:12px; color:var(--steel); margin-top:4px; }
     .tiles.stats { padding-top:0; }
+    /* одно число — плитка во всю ширину, число и подпись в строку */
+    .tiles.one { grid-template-columns:1fr; }
+    .tiles.one .tile { display:flex; align-items:baseline; gap:10px; }
+    .tiles.one .tile span { margin-top:0; font-size:15px; }
     /* значение словом («Мужской») в 20px не влезает в треть экрана — набираем мельче,
        высоту строки подгоняем, чтобы плитки в ряду остались одной высоты */
     .tile.word b { font-size:16px; font-weight:600; line-height:1.45; }
@@ -547,8 +551,15 @@
        это единственное, за чем сюда заходят. */
     .mine-heats { margin:14px var(--pad) 4px; background:var(--plate); border-radius:12px;
       padding:14px 16px 16px; box-shadow:inset 3px 0 0 var(--accent); }
-    .mine-heats .t { font-size:13px; font-weight:600; color:var(--accent);
-      letter-spacing:.01em; }
+    .mine-heats .t { display:flex; align-items:center; justify-content:space-between; gap:12px;
+      width:100%; border:none; background:none; padding:0; cursor:pointer; text-align:left;
+      font-size:13px; font-weight:600; color:var(--accent); letter-spacing:.01em; min-height:24px; }
+    .mine-heats .t span { color:var(--steel); font-weight:500; margin-left:6px; }
+    .mine-heats .t svg { flex:none; color:var(--steel); transition:transform .15s; }
+    .mine-heats.open .t svg { transform:rotate(180deg); }
+    .mine-heats .rs { display:none; }
+    .mine-heats.open .rs { display:block; }
+    .mine-heats:not(.open) { padding-bottom:14px; }
     .mine-heats .r + .r { box-shadow:inset 0 1px 0 var(--hair); padding-top:12px; }
     .mine-heats .r { display:flex; align-items:baseline; justify-content:space-between;
       gap:12px; margin-top:10px; }
@@ -633,18 +644,16 @@
       padding:16px var(--pad); }
     .acc-name { font-size:17px; font-weight:700; letter-spacing:-.02em; }
     .acc-meta { font-size:13px; color:var(--steel); margin-top:3px; }
-    /* Условия выполнения — в рамках: «AMRAP 8 мин» и «8:00» это регламент,
-       а не подпись к названию. Формат и время разведены по отдельным блокам
-       с подписями: это два разных вопроса — «что делаем» и «сколько есть».
-       Красным крышку не выделяем: --live значит «идёт сейчас», и на карточке
-       комплекса этот же красный читался как состояние, а не как ограничение. */
-    .acc-terms { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-    .acc-term { border:1px solid rgba(168,204,58,.28); border-radius:9px;
-      padding:7px 11px; min-width:88px; }
-    .acc-term b { display:block; font-size:10px; font-weight:600; color:var(--accent);
-      letter-spacing:.06em; text-transform:uppercase; }
-    .acc-term i { display:block; font-style:normal; font-size:14px; font-weight:600;
-      color:var(--chalk); margin-top:3px; font-variant-numeric:tabular-nums; }
+    /* Условия выполнения — компактные плашки в одну строку: «AMRAP 8 мин»
+       и «8:00» это регламент, а не подпись к названию. Подписей «Формат»
+       и «Время» нет — крупные блоки с ними съедали карточку; время отличает
+       значок часов. Красным крышку не выделяем: --live значит «идёт сейчас». */
+    .acc-terms { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .acc-term { display:inline-flex; align-items:center; gap:5px;
+      border:1px solid rgba(168,204,58,.28); border-radius:7px; padding:3px 8px;
+      font-size:13px; font-weight:600; color:var(--chalk); line-height:1.3;
+      font-variant-numeric:tabular-nums; }
+    .acc-term svg { flex:none; color:var(--accent); }
     .acc-body { display:none; padding:0 var(--pad) 18px; }
     .acc.open .acc-body { display:block; }
     .acc.open .acc-chev { transform:rotate(180deg); }
@@ -1742,11 +1751,13 @@
           .filter(Boolean).join(' · ');
         // Тип результата показываем, только если организатор не описал формат
         // сам: «На время» рядом с «Время» — это одно и то же дважды.
+        const clock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
         const terms = [
-          ['Формат', w.scoring_note || RES_LABEL[w.result_type] || ''],
-          ['Время', w.time_cap],
-        ].filter(([, v]) => v).map(([k, v]) =>
-          `<div class="acc-term"><b>${k}</b><i>${esc(v)}</i></div>`).join('');
+          ['', w.scoring_note || RES_LABEL[w.result_type] || ''],
+          [clock, w.time_cap],
+        ].filter(([, v]) => v).map(([icon, v]) =>
+          `<span class="acc-term">${icon}${esc(v)}</span>`).join('');
         const who = w.divisions.length ? w.divisions.map(d => d.name).join(', ') : 'Все категории';
         return `
         <div class="acc" data-id="${w.id}">
@@ -1816,8 +1827,13 @@
       // сам, как только организатор поменял расстановку.
       const mineAll = list.filter(h => h.entries.some(a => a.is_me));
       const mineBlock = !mineAll.length ? '' : `
-        <div class="mine-heats">
-          <div class="t">Ваши заходы</div>
+        <div class="mine-heats${mineHeatsOpen ? ' open' : ''}">
+          <button class="t" id="mine-heats-t" aria-expanded="${mineHeatsOpen}">
+            <div>Ваши заходы<span>${mineAll.length}</span></div>
+            <svg width="12" height="8" viewBox="0 0 12 8" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1.5 6 6.5 11 1.5"/></svg>
+          </button>
+          <div class="rs">
           ${mineAll.map(h => {
             const me = h.entries.find(a => a.is_me);
             return `<div class="r">
@@ -1829,6 +1845,7 @@
               <div class="tm">${esc(h.start_time || '—')}</div>
             </div>`;
           }).join('')}
+          </div>
         </div>`;
 
       const ids = new Set(divsMatching(ev).map(d => d.name));
@@ -1840,7 +1857,7 @@
         box.innerHTML = filterBar(ev) + findBar('Найти участника') + mineBlock
           + `<div class="note">${evFind
             ? 'Никого не нашлось.' : 'В этой категории заходов нет.'}</div>`;
-        wireFilter(ev); wireFind(ev);
+        wireFilter(ev); wireFind(ev); wireMineHeats();
         return;
       }
       const days = [...new Set(fits.map(h => h.day))];
@@ -1866,9 +1883,20 @@
       box.querySelectorAll('.heat-row').forEach(b => b.onclick = () => openHeat(ev, b.dataset.id));
       wireFilter(ev);
       wireFind(ev);
+      wireMineHeats();
     }
 
     let evHeats = [];
+    // Раскрыт ли блок «Ваши заходы»: переживает перерисовку от фильтра и поиска
+    let mineHeatsOpen = false;
+    function wireMineHeats() {
+      const t = $('mine-heats-t');
+      if (t) t.onclick = () => {
+        mineHeatsOpen = !mineHeatsOpen;
+        t.parentElement.classList.toggle('open', mineHeatsOpen);
+        t.setAttribute('aria-expanded', mineHeatsOpen);
+      };
+    }
     function openHeat(ev, id) {
       const h = evHeats.find(x => String(x.id) === String(id));
       if (!h) return;
@@ -1954,7 +1982,7 @@
       if (!ev.profile_complete) return `
         <div class="notice">
           <b>Профиль не заполнен</b>
-          Имя и пол нужны организатору, чтобы включить вас в протокол.
+          Для регистрации необходимо заполнить все данные профиля.
           <button class="btn" id="ev-to-profile">Заполнить профиль</button>
         </div>`;
       return `<div class="pad"><button class="btn" id="ev-register">Подать заявку</button></div>`;
@@ -2381,7 +2409,7 @@
         ${!me.profile_complete ? `
           <div class="notice" style="margin:4px var(--pad) 20px">
             <b>Профиль не заполнен</b>
-            Имя и пол нужны, чтобы подать заявку на старт.
+            Для регистрации необходимо заполнить все данные профиля.
             <button class="btn" id="p-fill">Заполнить профиль</button>
           </div>` : ''}
         <div class="tiles">
@@ -2391,14 +2419,12 @@
         </div>
         ${next ? nextStartHTML(next) : ''}
         <div class="h">Статистика</div>
-        <div class="tiles stats">
+        <div class="tiles stats one">
           ${tile(stats.starts, plural(stats.starts, 'старт', 'старта', 'стартов'))}
-          ${tile(stats.podiums, plural(stats.podiums, 'подиум', 'подиума', 'подиумов'))}
-          ${tile(stats.best, 'лучшее место')}
         </div>
         <div class="h">История выступлений${hist.length ? `<span>${hist.length}</span>` : ''}</div>
         ${hist.length ? hist.map(histRowHTML).join('')
-          : '<div class="note tight">Здесь появятся старты, в которых вы выступили: место, баллы и переход в лидерборд.</div>'}
+          : '<div class="note tight">Здесь появятся ивенты, в которых вы участвовали</div>'}
         <div class="h">Настройки</div>
         <label class="switch-row" for="p-notify">
           <span><b>Уведомления в боте</b>
