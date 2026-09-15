@@ -293,6 +293,31 @@
       box-shadow:inset 0 -1px 0 var(--hair); }
     .my-title { font-size:17px; font-weight:700; line-height:1.25; letter-spacing:-.02em; }
 
+    /* «Мои» — тем же языком, что профиль и обзор: активные заявки карточками
+       со сроком и оплатой, прошедшие и работа на стартах — строками, разделы
+       по сетке главной. Первый заголовок ближе к шапке: над ним ничего нет. */
+    #my-list .h.sec { font-size:20px; letter-spacing:-.02em; padding:44px var(--pad) 14px; }
+    #my-list .h.sec:first-child { padding-top:18px; }
+    .my-cards { display:grid; gap:10px; }
+    .my-row .role { display:inline-block; margin-top:6px; font-size:11px; font-weight:600;
+      background:var(--plate); border-radius:6px; padding:3px 7px; color:var(--chalk); }
+    .my-row .my-title { font-size:16px; }
+    .my-admin { display:flex; align-items:center; gap:12px; width:calc(100% - var(--pad) * 2);
+      margin:12px var(--pad) 0; min-height:60px; padding:10px 16px; border:none; border-radius:14px;
+      background:var(--plate); color:var(--chalk); text-align:left; cursor:pointer; }
+    .my-admin:active { background:rgba(255,255,255,.08); }
+    .my-admin .ic { width:36px; height:36px; border-radius:10px; flex:none; display:grid;
+      place-items:center; background:rgba(168,204,58,.14); color:var(--accent); }
+    .my-admin b { display:block; font-size:15px; font-weight:600; }
+    .my-admin small { display:block; font-size:12px; color:var(--steel); margin-top:2px; }
+    .my-admin > span:nth-child(2) { flex:1; min-width:0; }
+    .my-admin[disabled] { opacity:.6; }
+    .my-empty { padding:64px var(--pad) 0; text-align:center; }
+    .my-empty b { display:block; font-size:20px; font-weight:700; letter-spacing:-.02em; }
+    .my-empty p { font-size:15px; color:var(--steel); margin-top:8px; }
+    .my-empty .btn { width:auto; display:inline-flex; align-items:center; padding:0 26px;
+      margin-top:22px; }
+
     /* одно число на экран: главный факт состояния */
     .hero { padding:24px var(--pad) 0; }
     .hero-label { font-size:13px; color:var(--steel); display:flex; align-items:center; gap:7px; }
@@ -1597,7 +1622,7 @@
             <div class="hero-value${
               hero.value.length > 14 ? ' xlong' : hero.value.length > 9 ? ' long' : ''
             }">${esc(hero.value)}</div>
-            ${feeLine(ev)}
+            ${ev.my_entry ? '' : feeLine(ev)}
           </div>
           <div class="fact-act">${actionBlock(ev)}</div>
         </div>
@@ -1627,6 +1652,8 @@
     // Стоимость участия одной цифрой. «от» появляется, только когда цены
     // категорий расходятся; бесплатная категория рядом с платными «от» описать
     // нельзя, поэтому там честный диапазон.
+    // У заявленного строки нет: цену его категории и срок оплаты называет
+    // блок заявки ниже в той же карточке, «от 3 500 ₽» рядом с «4 500 ₽» путало.
     function feeLine(ev) {
       const p = (ev.divisions || []).map(d => d.price)
         .filter(v => v !== null && v !== undefined);
@@ -2186,48 +2213,54 @@
       // заявкой, а за своим стартом, и путать одно с другим нельзя.
       const staff = me.staff_of || [];
       if (!list.length && !staff.length && !me.is_organizer) {
-        box.innerHTML = '<div class="note">Вы пока никуда не заявлены.<br>Выберите старт на главной или в поиске.</div>';
+        box.innerHTML = `<div class="my-empty">
+          <b>Вы пока никуда не заявлены</b>
+          <p>Выберите старт — заявка появится здесь со сроком оплаты.</p>
+          <button class="btn" id="my-find">Найти старт</button></div>`;
+        $('my-find').onclick = () => show('search');
         return;
       }
-      const entryRows = list.map(e => {
-        const [tone, text] = stateLine(e);
-        return `
+      const byDate = (a, b) => String(a.date_start).localeCompare(String(b.date_start));
+      const active = list.filter(e => e.status !== 'finished').sort(byDate);
+      const past = list.filter(e => e.status === 'finished').sort((a, b) => byDate(b, a));
+      const row = (e, sub, extra = '') => `
         <button class="my-row" data-id="${e.id}">
           <div class="mark sm">${markHTML(e)}</div>
-          <div>
+          <div style="min-width:0">
             <div class="my-title">${esc(e.title)}</div>
-            <div class="row-sub">${esc(fmtDates(e.date_start, e.date_end))}, ${esc(e.division)}</div>
-            <div class="state" style="margin-top:5px"><i class="dot ${tone}"></i>${esc(text)}</div>
+            <div class="row-sub">${esc(sub)}</div>${extra}
           </div>
         </button>`;
-      }).join('');
-      const staffRows = staff.map(e => `
-        <button class="my-row" data-id="${e.id}">
-          <div class="mark sm">${markHTML(e)}</div>
-          <div>
-            <div class="my-title">${esc(e.title)}</div>
-            <div class="row-sub">${esc(STAFF_ROLE[e.role] || e.role)}${
-              e.date_start ? ', ' + esc(fmtDates(e.date_start, e.date_end)) : ''}</div>
-          </div>
-        </button>`).join('');
+      const pastRows = past.map(e =>
+        row(e, [fmtDates(e.date_start, e.date_end), e.division].filter(Boolean).join(' · '))).join('');
+      const staffRows = staff.map(e =>
+        row(e, fmtDates(e.date_start, e.date_end), `<span class="role">${esc(STAFF_ROLE[e.role] || e.role)}</span>`)).join('');
 
       // Организатору нужен десктоп: карточка, категории, комплексы и заходы
       // на телефоне не заводятся. Ссылка короткая, дальше сессия на 12 часов.
-      // не по списку выше: он показывает только предстоящее, а войти
-      // нужно и после старта — поправить результат или доотметить оплату
-      const isOrg = !!me.is_organizer;
-      const admin = !isOrg ? '' : `
-        <div class="pad" style="padding-top:14px">
-          <button class="btn quiet" id="go-admin">Открыть админку</button>
-          <div class="note" style="padding:10px 0 0">Откроется в браузере.
-            Там заводятся категории, комплексы, заходы и расписание.</div>
-        </div>`;
-      box.innerHTML = (staff.length || isOrg)
-        ? `${staffRows ? '<div class="h">Работа на стартах</div>' + staffRows : ''}${admin}
-           <div class="h">Мои заявки</div>${entryRows
-             || '<div class="note">Вы пока никуда не заявлены.</div>'}`
-        : entryRows;
+      // Кнопка не зависит от списка выше: он показывает только предстоящее,
+      // а войти нужно и после старта — поправить результат или доотметить оплату.
+      const admin = !me.is_organizer ? '' : `
+        <button class="my-admin" id="go-admin">
+          <span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/>
+            <path d="M8 21h8M12 17v4"/></svg></span>
+          <span><b>Открыть админку</b><small>В браузере: категории, комплексы, заходы, расписание</small></span>
+          <svg width="8" height="12" viewBox="0 0 8 12" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round" style="color:var(--steel)"><path d="M1.5 1 6.5 6 1.5 11"/></svg>
+        </button>`;
+
+      box.innerHTML = `
+        <div class="h sec">Мои заявки${active.length ? `<span>${active.length}</span>` : ''}</div>
+        ${active.length ? `<div class="my-cards">${active.map(entryCardHTML).join('')}</div>`
+          : '<div class="note tight">Активных заявок нет. <a href="#" id="my-find">Найти старт</a></div>'}
+        ${staffRows || admin ? `<div class="h sec">Работа на стартах</div>${staffRows}${admin}` : ''}
+        ${pastRows ? `<div class="h sec">Прошедшие</div>${pastRows}` : ''}
+        <div style="height:40px"></div>`;
       box.querySelectorAll('[data-id]').forEach(c => c.onclick = () => openEvent(c.dataset.id));
+      box.querySelectorAll('[data-ev]').forEach(c => c.onclick = () => openEvent(c.dataset.ev));
+      const find = $('my-find');
+      if (find) find.onclick = ev => { ev.preventDefault(); show('search'); };
       const ga = $('go-admin');
       if (ga) ga.onclick = async () => {
         ga.disabled = true;
@@ -2415,7 +2448,7 @@
     // вкладку лидерборда ищем по названию: ключ живёт в EV_TABS, и дублировать его здесь незачем
     const lbTab = () => (EV_TABS.find(t => t[1] === 'Лидерборд') || ['overview'])[0];
 
-    function nextStartHTML(e) {
+    function entryCardHTML(e) {
       const d = daysLeft(e.date_start);
       const when = e.status === 'live' ? '<i class="dot live"></i>Идёт сейчас'
         : d === null ? '' : d <= 0 ? 'Сегодня' : `Через ${d} ${plural(d,'день','дня','дней')}`;
@@ -2425,7 +2458,6 @@
         : e.pay_due ? `<i class="dot warn"></i>Оплатить до&nbsp;<b>${esc(fmtDay(e.pay_due))}</b>`
         : '<i class="dot warn"></i>Ждёт оплаты';
       return `
-        <div class="h">Ближайший старт</div>
         <button class="next" data-ev="${e.id}">
           <div class="next-main">
             <div class="mark sm">${markHTML(e)}</div>
@@ -2437,6 +2469,8 @@
           ${when || pay ? `<div class="next-foot"><span class="next-when">${when}</span><span>${pay}</span></div>` : ''}
         </button>`;
     }
+
+    const nextStartHTML = e => `<div class="h">Ближайший старт</div>${entryCardHTML(e)}`;
 
     function histRowHTML(x) {
       const medal = x.place <= 3 ? ` m${x.place}` : '';
